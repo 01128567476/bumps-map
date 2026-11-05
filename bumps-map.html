@@ -204,6 +204,15 @@
     .menu, .sheet .card, .banner.close::after, .me .halo { animation: none !important; }
   }
 
+  /* ---------- route sheet ---------- */
+  .lbl { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: -6px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { min-height: 40px; padding: 8px 13px; font-size: 13px; box-shadow: none; background: var(--chip); border-color: transparent; }
+  .pill {
+    position: fixed; left: 0; right: 0; margin: 0 auto; width: max-content; z-index: 1000;
+    bottom: calc(max(14px, env(safe-area-inset-bottom)) + 76px); box-shadow: var(--shadow); border-radius: 22px; padding: 11px 22px;
+  }
+
   /* ---------- leaflet tweaks ---------- */
   .leaflet-container { font-family: inherit; }
   .leaflet-top { margin-top: calc(max(12px, env(safe-area-inset-top)) + 82px); }
@@ -270,6 +279,7 @@
   <div class="grp">الطريق</div>
   <div class="row">
     <button id="btnFind">اختار الطريق</button>
+    <button id="btnReroute">حدّث من مكاني</button>
     <button id="btnRoute">ارسم الطريق</button>
     <button id="btnUndo" hidden>تراجع</button>
     <button id="btnClearRoute" hidden>امسح الطريق</button>
@@ -286,6 +296,7 @@
   <button class="menu-toggle" id="tgView" aria-expanded="false">🧭 الخريطة والعرض ▴</button>
   <button class="menu-toggle" id="tgTrip" aria-expanded="false">🛣️ الرحلة والطريق والمطبات ▴</button>
 </div>
+<button class="pill" id="btnCancelPick" hidden>إلغاء الاختيار</button>
 <button class="fab" id="btnRecenter" aria-label="ارجع لموقعي" hidden>
   <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3.6"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg>
 </button>
@@ -293,10 +304,25 @@
 <div class="sheet" id="sheetRoute" hidden>
   <div class="card">
     <h2>اختار الطريق</h2>
-    <p>اكتب اسم المكان أو إحداثياته، والطريق بيتحسب بين النقطتين على الطرق الحقيقية. لو فيه أكتر من طريق، حط مكان على الطريق اللي عايزه في خانة "عن طريق".</p>
-    <input id="inFrom" value="31.18389, 30.52417" placeholder="من" autocomplete="off">
-    <input id="inVia" placeholder="عن طريق (اختياري)" autocomplete="off">
+    <p>البداية بتبقى موقعك الحالي تلقائيًا. تقدر تغيّر البداية والنهاية: اكتب اسم مكان أو إحداثيات، أو اختار من الخريطة.</p>
+    <div class="lbl">من</div>
+    <input id="inFrom" value="موقعي الحالي" placeholder="من" autocomplete="off">
+    <div class="chips">
+      <button class="chip" id="btnFromMe">📍 موقعي الحالي</button>
+      <button class="chip" id="btnFromMap">🗺️ من الخريطة</button>
+    </div>
+    <div class="lbl">عن طريق (اختياري): حط مكان على الطريق اللي عايزه</div>
+    <input id="inVia" placeholder="عن طريق" autocomplete="off">
+    <div class="chips">
+      <button class="chip" id="btnViaMap">🗺️ من الخريطة</button>
+    </div>
+    <div class="lbl">إلى</div>
     <input id="inTo" value="31.035838, 30.431895" placeholder="إلى" autocomplete="off">
+    <div class="chips">
+      <button class="chip" id="btnToMe">📍 موقعي الحالي</button>
+      <button class="chip" id="btnToMap">🗺️ من الخريطة</button>
+      <button class="chip" id="btnSwap">⇅ بدّل</button>
+    </div>
     <p id="routeMsg"></p>
     <div class="row">
       <button id="btnGo" class="on">اعمل الطريق</button>
@@ -561,7 +587,7 @@
     if (txtEl.innerHTML !== html) txtEl.innerHTML = html;
   }
   function updateBanner() {
-    if (!mePos) return;
+    if (!mePos || pickTarget) return;
     var all = bumps.concat(demoBumps), best = null, bestD = 1e9;
     all.forEach(function (b) {
       var d = dist(mePos, b);
@@ -818,7 +844,13 @@
   try { map.setPitch(START_PITCH, { animate: false }); } catch (e) {}
 
   // route by place names (geocoding + road routing)
+  var ME_TXT = 'موقعي الحالي';
+  function isMe(q) { return /^\s*(موقعي|مكاني|my location)/i.test(q); }
   function geocode(q) {
+    // "my location" = a fresh GPS fix, so the route always starts from where you are right now
+    if (isMe(q)) return new Promise(function (res, rej) {
+      getStartPos(function (p) { if (p) res([+p[0].toFixed(6), +p[1].toFixed(6)]); else rej(new Error('gps')); });
+    });
     var m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)\s*$/);
     if (m) return Promise.resolve([parseFloat(m[1]), parseFloat(m[2])]);
     function nominatim(x) {
@@ -848,14 +880,43 @@
     return p;
   }
   var sheetRoute = document.getElementById('sheetRoute'), routeMsg = document.getElementById('routeMsg');
-  document.getElementById('btnFind').onclick = function () { sheetRoute.hidden = false; };
+  var inFrom = document.getElementById('inFrom'), inVia = document.getElementById('inVia'), inTo = document.getElementById('inTo');
+  var btnCancelPick = document.getElementById('btnCancelPick');
+  document.getElementById('btnFind').onclick = function () {
+    sheetRoute.hidden = false; routeMsg.textContent = '';
+    if (!inFrom.value.trim()) inFrom.value = ME_TXT;
+    if (isMe(inFrom.value) || isMe(inTo.value)) getStartPos(function (p) {
+      if (p && !sheetRoute.hidden && !routeMsg.textContent) routeMsg.textContent = 'مكانك الحالي: ' + p[0].toFixed(5) + ', ' + p[1].toFixed(5);
+    });
+  };
   document.getElementById('btnCloseRoute').onclick = function () { sheetRoute.hidden = true; };
+  document.getElementById('btnFromMe').onclick = function () { inFrom.value = ME_TXT; };
+  document.getElementById('btnToMe').onclick = function () { inTo.value = ME_TXT; };
+  document.getElementById('btnSwap').onclick = function () { var t = inFrom.value; inFrom.value = inTo.value; inTo.value = t; };
+
+  // pick a start / via / end point by tapping the map
+  var pickTarget = null;
+  var PICK_LABEL = { inFrom: 'اختار نقطة البداية', inVia: 'اختار مكان على الطريق', inTo: 'اختار نقطة النهاية' };
+  function startPick(id) {
+    pickTarget = id; sheetRoute.hidden = true;
+    if (routeMode) setRouteMode(false);
+    setAddMode(false);
+    follow = false; btnFollow.classList.remove('on');
+    btnCancelPick.hidden = false; updateCursor();
+    distEl.textContent = '--'; banner.className = 'banner';
+    txtEl.innerHTML = '<b>' + PICK_LABEL[id] + '</b><br>دوس على الخريطة في المكان اللي عايزه';
+  }
+  function endPick() { pickTarget = null; btnCancelPick.hidden = true; updateCursor(); idleStatus(); }
+  btnCancelPick.onclick = function () { endPick(); sheetRoute.hidden = false; };
+  document.getElementById('btnFromMap').onclick = function () { startPick('inFrom'); };
+  document.getElementById('btnViaMap').onclick = function () { startPick('inVia'); };
+  document.getElementById('btnToMap').onclick = function () { startPick('inTo'); };
+
   document.getElementById('btnGo').onclick = function () {
-    var f = document.getElementById('inFrom').value.trim(),
-        v = document.getElementById('inVia').value.trim(),
-        t = document.getElementById('inTo').value.trim();
-    if (!f || !t) { routeMsg.textContent = 'اكتب البداية والنهاية'; return; }
-    routeMsg.textContent = 'بدور على الأماكن...';
+    var f = inFrom.value.trim() || ME_TXT, v = inVia.value.trim(), t = inTo.value.trim();
+    if (!t) { routeMsg.textContent = 'اكتب النهاية'; return; }
+    if (isMe(f) && isMe(t)) { routeMsg.textContent = 'البداية والنهاية نفس المكان'; return; }
+    routeMsg.textContent = (isMe(f) || isMe(t)) ? 'بحدد موقعك...' : 'بدور على الأماكن...';
     var places = [geocode(f)];
     if (v) places.push(geocode(v));
     places.push(geocode(t));
@@ -867,31 +928,37 @@
         .then(function (j) {
           if (!j.routes || !j.routes[0]) throw new Error('route');
           var c = j.routes[0].geometry.coordinates.map(function (x) { return [x[1], x[0]]; });
-          route = { wps: [pts[0], pts[pts.length - 1]], segs: [c] };
+          // the router snaps to the nearest street: make the green dot and the blue line start (and end) exactly at the chosen points
+          var a0 = pts[0], z0 = pts[pts.length - 1];
+          if (dist(a0, c[0]) > 2) c.unshift(a0);
+          if (dist(z0, c[c.length - 1]) > 2) c.push(z0);
+          route = { wps: [a0, z0], segs: [c] };
           saveRoute(); drawRoute();
           showRouteDestinationUp();
           follow = false; btnFollow.classList.remove('on');
-          routeMsg.textContent = 'الطريق جاهز: ' + (j.routes[0].distance / 1000).toFixed(1) + ' كم';
+          var mins = Math.round(j.routes[0].duration / 60);
+          routeMsg.textContent = 'الطريق جاهز: ' + (j.routes[0].distance / 1000).toFixed(1) + ' كم، حوالي ' + mins + ' دقيقة';
           setTimeout(function () { sheetRoute.hidden = true; }, 900);
         });
-    }).catch(function () {
-      routeMsg.textContent = 'معرفتش ألاقي المكان أو الطريق. جرّب اسم أدق أو إحداثيات.';
+    }).catch(function (e) {
+      routeMsg.textContent = (e && e.message === 'gps')
+        ? 'مش قادر أجيب موقعك. اسمح للمتصفح باستخدام الموقع أو اكتب مكان البداية.'
+        : 'معرفتش ألاقي المكان أو الطريق. جرّب اسم أدق أو إحداثيات.';
     });
   };
-
-  // preset route: Mahmoudiyah -> Damanhour University faculties complex (runs once)
-  try {
-    if (!localStorage.getItem('routePreset3')) {
-      localStorage.setItem('routePreset3', '1');
-      route = { wps: [], segs: [] }; saveRoute(); drawRoute();
-      sheetRoute.hidden = false;
-      setTimeout(function () { document.getElementById('btnGo').onclick(); }, 400);
-    }
-  } catch (e) {}
+  // same destination, but the route is rebuilt from where you are now
+  document.getElementById('btnReroute').onclick = function () {
+    if (route.wps.length < 2) { document.getElementById('btnFind').onclick(); return; }
+    inFrom.value = ME_TXT; inVia.value = '';
+    var d = route.wps[route.wps.length - 1];
+    inTo.value = d[0] + ', ' + d[1];
+    sheetRoute.hidden = false;
+    document.getElementById('btnGo').onclick();
+  };
 
   // adding bumps
   var addMode = false, btnAdd = document.getElementById('btnAdd');
-  function updateCursor() { map.getContainer().style.cursor = (addMode || routeMode) ? 'crosshair' : ''; }
+  function updateCursor() { map.getContainer().style.cursor = (addMode || routeMode || pickTarget) ? 'crosshair' : ''; }
   function setAddMode(v) {
     addMode = v; btnAdd.classList.toggle('on', v);
     btnAdd.textContent = v ? 'دوس مكان المطب' : 'إضافة مطب';
@@ -899,6 +966,13 @@
   }
   btnAdd.onclick = function () { if (routeMode) setRouteMode(false); setAddMode(!addMode); };
   map.on('click', function (e) {
+    if (pickTarget) {
+      var pid = pickTarget;
+      document.getElementById(pid).value = e.latlng.lat.toFixed(6) + ', ' + e.latlng.lng.toFixed(6);
+      endPick(); sheetRoute.hidden = false;
+      routeMsg.textContent = 'اتحدد المكان. دوس "اعمل الطريق".';
+      return;
+    }
     if (routeMode) { addWaypoint([+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)]); return; }
     if (!addMode) return;
     bumps.push([+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)]);
@@ -991,7 +1065,7 @@
     closeAll();
   });
   // actions that move you away from the menu close it; view controls stay open so you can tap them repeatedly
-  ['btnTrack', 'btnDemo', 'btnFind', 'btnRoute', 'btnAdd', 'btnHere', 'btnData'].forEach(function (id) {
+  ['btnTrack', 'btnDemo', 'btnFind', 'btnReroute', 'btnRoute', 'btnAdd', 'btnHere', 'btnData'].forEach(function (id) {
     document.getElementById(id).addEventListener('click', closeAll);
   });
 })();
