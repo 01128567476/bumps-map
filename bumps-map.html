@@ -2,7 +2,11 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#eef1f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0f17" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>خريطة المطبات</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -12,7 +16,8 @@
 <style>
   :root {
     --bg: #eef1f6;
-    --panel: rgba(255,255,255,.80);
+    --panel: rgba(255,255,255,.95);
+    --panel-soft: rgba(255,255,255,.80);
     --solid: #ffffff;
     --fg: #0f172a;
     --muted: #64748b;
@@ -28,7 +33,8 @@
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0b0f17;
-      --panel: rgba(20,25,37,.78);
+      --panel: rgba(20,25,37,.95);
+      --panel-soft: rgba(20,25,37,.78);
       --solid: #171c29;
       --fg: #f1f5f9;
       --muted: #94a3b8;
@@ -43,14 +49,15 @@
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg);
+    overflow: hidden; overscroll-behavior: none; -webkit-text-size-adjust: 100%; -webkit-touch-callout: none;
     font-family: "IBM Plex Sans Arabic", "Tajawal", system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif; }
-  #map { position: fixed; inset: 0; }
+  #map { position: fixed; inset: 0; touch-action: none; -webkit-user-select: none; user-select: none; }
 
   /* ---------- top banner ---------- */
   .banner {
     position: fixed; top: max(12px, env(safe-area-inset-top)); left: 12px; right: 12px; z-index: 1000;
     max-width: 560px; margin: 0 auto;
-    background: var(--panel); -webkit-backdrop-filter: blur(18px) saturate(1.6); backdrop-filter: blur(18px) saturate(1.6);
+    background: var(--panel);
     border-radius: var(--r); padding: 12px 16px;
     box-shadow: var(--shadow);
     display: flex; align-items: center; gap: 14px;
@@ -58,10 +65,12 @@
     transition: border-color .25s, box-shadow .25s, background .25s;
   }
   .banner.near { border-color: var(--warn); box-shadow: var(--shadow), 0 0 0 4px rgba(245,158,11,.18); }
-  .banner.close { border-color: var(--danger); box-shadow: var(--shadow), 0 0 0 4px rgba(239,68,68,.22); animation: pulseBanner 1s ease-in-out infinite; }
-  @keyframes pulseBanner { 50% { box-shadow: var(--shadow), 0 0 0 9px rgba(239,68,68,.10); } }
+  .banner.close { border-color: var(--danger); box-shadow: var(--shadow), 0 0 0 4px rgba(239,68,68,.22); }
+  .banner::after { content: ""; position: absolute; inset: -2px; border-radius: inherit; border: 3px solid var(--danger); opacity: 0; pointer-events: none; }
+  .banner.close::after { animation: pingBanner 1s ease-out infinite; }
+  @keyframes pingBanner { 0% { opacity: .7; transform: scale(1); } 100% { opacity: 0; transform: scale(1.06, 1.22); } }
   .banner .dist {
-    font-size: 30px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;
+    font-size: 34px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;
     min-width: 4.2ch; letter-spacing: -.5px; direction: rtl; text-align: center;
   }
   .banner .txt { font-size: 13px; color: var(--muted); line-height: 1.5; flex: 1; }
@@ -81,16 +90,16 @@
   .bar {
     position: fixed; left: 12px; right: 12px; bottom: max(14px, env(safe-area-inset-bottom)); z-index: 1000;
     display: flex; gap: 6px; max-width: 560px; margin: 0 auto; padding: 6px;
-    background: var(--panel); -webkit-backdrop-filter: blur(18px) saturate(1.6); backdrop-filter: blur(18px) saturate(1.6);
+    background: var(--panel);
     border: 1px solid var(--line); border-radius: 26px; box-shadow: var(--shadow);
   }
   .menu {
     position: fixed; left: 12px; right: 12px; margin: 0 auto; max-width: 560px; z-index: 1001;
     bottom: calc(max(14px, env(safe-area-inset-bottom)) + 74px);
-    background: var(--panel); -webkit-backdrop-filter: blur(22px) saturate(1.6); backdrop-filter: blur(22px) saturate(1.6);
+    background: var(--panel);
     border: 1px solid var(--line); border-radius: 26px;
     padding: 14px 14px 16px; box-shadow: var(--shadow);
-    max-height: 55vh; overflow-y: auto; animation: rise .22s ease-out;
+    max-height: 55vh; overflow-y: auto; overscroll-behavior: contain; animation: rise .22s ease-out;
   }
   @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.98); } }
   .menu[hidden] { display: none; }
@@ -106,12 +115,20 @@
   button {
     font: inherit; font-size: 14px; font-weight: 600; color: var(--fg);
     background: var(--solid); border: 1px solid var(--line); border-radius: 14px;
-    padding: 11px 15px; box-shadow: 0 2px 8px rgba(15,23,42,.10); cursor: pointer;
+    padding: 11px 15px; min-height: 44px; box-shadow: 0 2px 8px rgba(15,23,42,.10); cursor: pointer;
+    touch-action: manipulation; -webkit-user-select: none; user-select: none;
     transition: transform .12s, background .2s, box-shadow .2s;
   }
   button:active { transform: scale(.97); }
   button.on { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; border-color: transparent; }
   button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+  /* frosted glass only while NOT driving: blurring a map that repaints every frame is what makes phones stutter */
+  @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    html:not(.drive) .bar, html:not(.drive) .menu {
+      background: var(--panel-soft); -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
+    }
+  }
 
   /* ---------- bottom sheets ---------- */
   .sheet {
@@ -123,7 +140,7 @@
   .sheet .card {
     background: var(--solid); width: 100%; max-width: 560px; border-radius: 28px 28px 0 0;
     padding: 26px 18px max(20px, env(safe-area-inset-bottom)); display: grid; gap: 12px;
-    max-height: 85%; overflow: auto; position: relative; box-shadow: 0 -10px 40px rgba(0,0,0,.25);
+    max-height: 85%; overflow: auto; overscroll-behavior: contain; position: relative; box-shadow: 0 -10px 40px rgba(0,0,0,.25);
     animation: slideUp .28s cubic-bezier(.2,.8,.2,1);
   }
   @keyframes slideUp { from { transform: translateY(40px); opacity: 0; } }
@@ -135,13 +152,13 @@
   .sheet p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.6; }
   .sheet code { background: var(--chip); padding: 2px 6px; border-radius: 6px; }
   textarea {
-    width: 100%; min-height: 150px; font: 13px/1.6 ui-monospace, Menlo, monospace; direction: ltr; text-align: left;
+    width: 100%; min-height: 150px; font: 16px/1.6 ui-monospace, Menlo, monospace; direction: ltr; text-align: left;
     background: var(--chip); color: var(--fg); border: 1px solid transparent; border-radius: 14px; padding: 12px;
   }
   textarea:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; }
   input {
-    width: 100%; font: inherit; font-size: 15px; color: var(--fg); background: var(--chip);
+    width: 100%; font: inherit; font-size: 16px; color: var(--fg); background: var(--chip);
     border: 1px solid transparent; border-radius: 14px; padding: 13px 14px;
   }
   input:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
@@ -176,20 +193,31 @@
   .bump.ahead i { background: linear-gradient(145deg, #fca5a5, #ef4444); box-shadow: 0 0 0 5px rgba(239,68,68,.3), 0 3px 8px rgba(0,0,0,.4); }
   .bump.demo i { opacity: .75; }
 
+  /* ---------- recenter button (shows when the map is not following you) ---------- */
+  .fab {
+    position: fixed; left: 12px; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 76px); z-index: 1000;
+    width: 52px; height: 52px; padding: 0; border-radius: 50%; display: grid; place-items: center;
+    color: var(--accent); background: var(--solid); box-shadow: var(--shadow);
+  }
+  .fab[hidden] { display: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .menu, .sheet .card, .banner.close::after, .me .halo { animation: none !important; }
+  }
+
   /* ---------- leaflet tweaks ---------- */
   .leaflet-container { font-family: inherit; }
   .leaflet-top { margin-top: calc(max(12px, env(safe-area-inset-top)) + 82px); }
   .leaflet-left { margin-left: 4px; }
   .leaflet-bar { border: none !important; border-radius: 16px; overflow: hidden; box-shadow: var(--shadow) !important; }
   .leaflet-bar a {
-    background: var(--panel); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    background: var(--panel);
     color: var(--fg); border-bottom: 1px solid var(--line); width: 38px; height: 38px; line-height: 38px;
   }
   .leaflet-bar a:last-child { border-bottom: none; }
   .leaflet-bar a:hover { background: var(--solid); color: var(--fg); }
   .leaflet-control-attribution {
     background: var(--panel) !important; color: var(--muted) !important; border-radius: 10px 0 0 0; font-size: 9px;
-    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+
   }
   .leaflet-control-attribution a { color: var(--muted) !important; }
   .leaflet-popup-content-wrapper { background: var(--solid); color: var(--fg); border-radius: 16px; box-shadow: var(--shadow); }
@@ -258,6 +286,9 @@
   <button class="menu-toggle" id="tgView" aria-expanded="false">🧭 الخريطة والعرض ▴</button>
   <button class="menu-toggle" id="tgTrip" aria-expanded="false">🛣️ الرحلة والطريق والمطبات ▴</button>
 </div>
+<button class="fab" id="btnRecenter" aria-label="ارجع لموقعي" hidden>
+  <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3.6"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg>
+</button>
 
 <div class="sheet" id="sheetRoute" hidden>
   <div class="card">
@@ -313,7 +344,7 @@
   var map = L.map('map', {
     zoomControl: false, attributionControl: true,
     rotate: true, bearing: 0, touchRotate: true, touchPitch: true, rotateControl: { closeOnZeroBearing: false },
-    maxBoundsViscosity: 1.0, zoomSnap: 0.25, minZoom: 4
+    maxBoundsViscosity: 1.0, zoomSnap: 0.25, minZoom: 4, bounceAtZoomLimits: false
   }).setView([30.0444, 31.2357], 16);
   // Egypt only: lock the view to Egypt, never zoom out further than the level where all of Egypt fits the screen
   map.setMaxBounds(EGYPT.pad(0.02)); // set after setView (rotate plugin needs the view first)
@@ -335,10 +366,10 @@
   var ESRI_NATIVE_ZOOM = 16; // raise to 17 for sharper (but emptier) tiles when zoomed in
   var baseDefs = {
     carto: { label: 'تفصيلية (OSM)', layer: L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      subdomains: 'abcd', maxZoom: 19, keepBuffer: 4, attribution: '&copy; OpenStreetMap contributors &copy; CARTO' }) },
+      subdomains: 'abcd', maxZoom: 19, keepBuffer: 2, updateWhenZooming: false, attribution: '&copy; OpenStreetMap contributors &copy; CARTO' }) },
     esri: { label: 'Esri', layer: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
       // Esri's tiles lose detail past level 16 here, so levels 17-19 reuse the level-16 tiles (stretched) and the details stay visible
-      maxZoom: 19, maxNativeZoom: ESRI_NATIVE_ZOOM, keepBuffer: 4, attribution: 'Tiles &copy; Esri, HERE, Garmin, OpenStreetMap contributors' }) }
+      maxZoom: 19, maxNativeZoom: ESRI_NATIVE_ZOOM, keepBuffer: 2, updateWhenZooming: false, attribution: 'Tiles &copy; Esri, HERE, Garmin, OpenStreetMap contributors' }) }
   };
   var baseName = 'esri'; // default
   try { if (localStorage.getItem('base2') === 'carto') baseName = 'carto'; } catch (e) {}
@@ -369,16 +400,24 @@
   var bumpLayer = L.layerGroup().addTo(map);
   var demoBumps = [];
   var aheadKey = null;
+  var bumpMarkers = [];
+  function refreshAhead() {
+    bumpMarkers.forEach(function (o) {
+      var el = o.m.getElement(), b = el && el.firstChild;
+      if (b) b.classList.toggle('ahead', o.key === aheadKey);
+    });
+  }
 
   function bumpIcon(cls) {
     return L.divIcon({ className: '', html: '<div class="bump ' + (cls || '') + '"><i></i></div>', iconSize: [26, 26], iconAnchor: [13, 13] });
   }
   function drawBumps() {
-    bumpLayer.clearLayers();
+    bumpLayer.clearLayers(); bumpMarkers = [];
     bumps.concat(demoBumps).forEach(function (b, i) {
       var isDemo = i >= bumps.length;
       var key = b[0] + ',' + b[1];
       var m = L.marker(b, { icon: bumpIcon((isDemo ? 'demo ' : '') + (key === aheadKey ? 'ahead' : '')) }).addTo(bumpLayer);
+      bumpMarkers.push({ key: key, m: m });
       if (!isDemo) {
         m.on('click', function () {
           var box = document.createElement('div');
@@ -402,35 +441,54 @@
   var meIcon = L.divIcon({ className: '', html: '<div class="me"><div class="halo"></div><div class="arrow" id="meArrow"></div><div class="dot"></div></div>', iconSize: [44, 44], iconAnchor: [22, 22] });
   var meMarker = null, mePos = null, heading = 0, follow = true, rotateMode = true;
 
-  // smooth movement: every new position (GPS fix or demo step) is glided to at 60fps instead of jumping once a second.
-  // Each frame is a cheap non-animated pan + a tiny bearing change, so the map slides continuously.
+  // smooth movement: every new position (GPS fix or demo step) is glided to instead of jumping once a second.
+  // The expensive part is moving/rotating the map, so it is throttled adaptively: if a map update is slow on this phone
+  // the gap between updates grows (60 -> 30 -> 20 fps), so the motion stays even instead of stuttering.
   var shown = null, shownH = 0, glide = null, glideRaf = null, fixDur = 1000, lastFixT = 0, lastBrg = null, fixedOn = null;
+  var lastMapT = 0, mapGap = 16, mapCost = 0, lastRot = '', meArrow = null;
   var meFixed = document.getElementById('meFixed'), meArrowFixed = document.getElementById('meArrowFixed');
   function angDiff(a, b) { return ((b - a + 540) % 360) - 180; }
+  // while following, the arrow is a fixed element at the screen centre (the map slides under it, so it never wobbles
+  // from pixel rounding); when the map is free (you dragged it) the normal map marker is used instead
+  function syncMeMode() {
+    if (!meMarker || follow === fixedOn) return;
+    fixedOn = follow; meFixed.hidden = !follow; meMarker.setOpacity(follow ? 0 : 1);
+    if (!follow && shown) meMarker.setLatLng(shown);
+  }
   function glideFrame(now) {
     var g = glide;
     if (!g || !meMarker) { glideRaf = null; return; }
     var t = Math.min(1, (now - g.t0) / g.dur);
     shown = [g.from[0] + (g.to[0] - g.from[0]) * t, g.from[1] + (g.to[1] - g.from[1]) * t];
     shownH = (g.h0 + angDiff(g.h0, g.h1) * t + 360) % 360;
-    meMarker.setLatLng(shown);
+    syncMeMode();
     var headingUp = rotateMode && follow;
-    // while following, the arrow is a fixed element at the screen centre (the map slides under it), so it never
-    // wobbles from pixel rounding; when the map is free (you dragged it), the normal map marker is used instead
-    if (follow !== fixedOn) {
-      fixedOn = follow; meFixed.hidden = !follow; meMarker.setOpacity(follow ? 0 : 1);
+    var rot = 'rotate(' + (headingUp ? 0 : Math.round(shownH)) + 'deg)';
+    if (rot !== lastRot) {
+      lastRot = rot;
+      meArrow = meArrow || document.getElementById('meArrow');
+      if (meArrow) meArrow.style.transform = rot;
+      meArrowFixed.style.transform = rot;
     }
-    // heading-up: the map turns, so the arrow always points to the top of the screen
-    var rot = 'rotate(' + (headingUp ? 0 : shownH) + 'deg)';
-    var a = document.getElementById('meArrow'); if (a) a.style.transform = rot;
-    meArrowFixed.style.transform = rot;
-    if (headingUp && map.setBearing) {
-      var wantB = (360 - shownH) % 360;
-      if (lastBrg === null || Math.abs(angDiff(lastBrg, wantB)) > 0.3) { lastBrg = wantB; map.setBearing(wantB, { animate: false }); }
+    if (!follow) meMarker.setLatLng(shown);
+    else if (now - lastMapT >= mapGap) {
+      lastMapT = now;
+      var c0 = performance.now();
+      // heading-up: the map turns, so the arrow always points to the top of the screen
+      if (headingUp && map.setBearing) {
+        var wantB = (360 - shownH) % 360;
+        if (lastBrg === null || Math.abs(angDiff(lastBrg, wantB)) > 0.5) { lastBrg = wantB; map.setBearing(wantB, { animate: false }); }
+      }
+      if (!map._animatingZoom) {
+        // leaflet rounds pans to whole pixels: skip frames where the move would be under a pixel (no useless map events)
+        var mpp = 40075016.686 * Math.cos(shown[0] * toRad) / (256 * Math.pow(2, map.getZoom()));
+        if (dist(map.getCenter(), shown) >= mpp * 0.8) map.panTo(shown, { animate: false });
+      }
+      mapCost = mapCost * 0.8 + (performance.now() - c0) * 0.2;
+      mapGap = mapCost > 14 ? 50 : mapCost > 7 ? 33 : 16;
     }
-    if (follow && !map._animatingZoom) map.panTo(shown, { animate: false });
     if (t < 1) glideRaf = requestAnimationFrame(glideFrame);
-    else { glide = null; glideRaf = null; }
+    else { glide = null; glideRaf = null; meMarker.setLatLng(shown); }
   }
   function setMe(pos, hdg) {
     mePos = pos;
@@ -452,12 +510,32 @@
   // the map away from it, and zoom (pinch, wheel, double tap) works around the centre where the arrow is. Zoom/rotate/tilt
   // all pivot on the arrow. When you're not driving, or you turn following off, the map behaves normally.
   var dragLocked = null, lastDrive = false;
+  var fab = document.getElementById('btnRecenter');
+  fab.onclick = function () {
+    follow = true; btnFollow.classList.add('on');
+    if (shown) map.setView(shown, Math.max(map.getZoom(), 16), { animate: false });
+    if (mePos) setMe(mePos, heading);
+  };
+  // keep the screen on while driving, otherwise the phone locks mid-trip
+  var wl = null;
+  function wakeOn() {
+    try {
+      if (!wl && navigator.wakeLock) navigator.wakeLock.request('screen').then(function (l) {
+        wl = l; l.addEventListener('release', function () { wl = null; });
+      }).catch(function () {});
+    } catch (e) {}
+  }
+  function wakeOff() { try { if (wl) { wl.release(); wl = null; } } catch (e) {} }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && lastDrive) wakeOn(); });
   function syncLock() {
+    syncMeMode();
+    fab.hidden = !(mePos && !follow);
     var driving = (typeof watchId !== 'undefined' && watchId !== null) || !!demoTimer;
     var lock = !!(follow && driving);
     if (driving !== lastDrive) {
       lastDrive = driving;
       document.documentElement.classList.toggle('drive', driving);
+      if (driving) wakeOn(); else wakeOff();
       map.invalidateSize({ animate: false });
       if (follow && shown && meMarker) map.panTo(shown, { animate: false });
     }
@@ -475,6 +553,13 @@
 
   var banner = document.getElementById('banner'), distEl = document.getElementById('dist'), txtEl = document.getElementById('txt');
   var ALERT_M = 100; // the bump alert starts at 100 m
+  var vibKey = null;
+  function setBanner(cls, d, html) {
+    // only touch the DOM when something changed: avoids a layout pass 10 times a second while driving
+    if (banner.className !== cls) banner.className = cls;
+    if (distEl.textContent !== d) distEl.textContent = d;
+    if (txtEl.innerHTML !== html) txtEl.innerHTML = html;
+  }
   function updateBanner() {
     if (!mePos) return;
     var all = bumps.concat(demoBumps), best = null, bestD = 1e9;
@@ -484,30 +569,33 @@
       if (d < ALERT_M && diff < 70 && d < bestD) { best = b; bestD = d; }
     });
     var key = best ? best[0] + ',' + best[1] : null;
-    if (key !== aheadKey) { aheadKey = key; drawBumps(); }
-    banner.className = 'banner' + (best ? (bestD < 50 ? ' close' : ' near') : '');
+    if (key !== aheadKey) { aheadKey = key; refreshAhead(); }
     if (best) {
-      distEl.textContent = Math.round(bestD) + ' م';
-      txtEl.innerHTML = '<b>مطب قدامك</b><br>هدّي السرعة';
+      // one short buzz when a bump gets close (Android; iOS Safari doesn't support vibration)
+      if (bestD < 60 && vibKey !== key) { vibKey = key; try { if (navigator.vibrate) navigator.vibrate([140, 70, 140]); } catch (e) {} }
+      setBanner('banner' + (bestD < 50 ? ' close' : ' near'), Math.round(bestD) + ' م', '<b>مطب قدامك</b><br>هدّي السرعة');
     } else {
-      distEl.textContent = '--';
-      txtEl.innerHTML = '<b>مفيش مطب قدامك</b><br>الطريق فاضي لحد دلوقتي';
+      vibKey = null;
+      setBanner('banner', '--', '<b>مفيش مطب قدامك</b><br>الطريق فاضي لحد دلوقتي');
     }
   }
 
   // GPS
-  var watchId = null, lastPos = null, btnTrack = document.getElementById('btnTrack');
+  var watchId = null, lastPos = null, gpsH = null, btnTrack = document.getElementById('btnTrack');
   btnTrack.onclick = function () {
     if (watchId !== null) {
       navigator.geolocation.clearWatch(watchId); watchId = null; btnTrack.classList.remove('on'); btnTrack.textContent = 'ابدأ التتبع'; return;
     }
     if (!navigator.geolocation) { txtEl.innerHTML = '<b>الجهاز مش بيدعم الـ GPS</b>'; return; }
-    stopDemo();
+    stopDemo(); gpsH = null;
     btnTrack.classList.add('on'); btnTrack.textContent = 'وقف التتبع';
     watchId = navigator.geolocation.watchPosition(function (p) {
-      var pos = [p.coords.latitude, p.coords.longitude], h = p.coords.heading;
+      var pos = [p.coords.latitude, p.coords.longitude], h = p.coords.heading, sp = p.coords.speed;
       if ((h === null || isNaN(h)) && lastPos && dist(lastPos, pos) > 3) h = bearing(lastPos, pos);
       if (!lastPos || dist(lastPos, pos) > 3) lastPos = pos;
+      if (typeof sp === 'number' && sp < 1) h = null; // standing still: GPS heading is random noise, keep the last one
+      // low-pass the heading so the rotating map doesn't twitch on every noisy fix
+      if (typeof h === 'number' && !isNaN(h)) { gpsH = (gpsH === null) ? h : (gpsH + angDiff(gpsH, h) * 0.45 + 360) % 360; h = gpsH; }
       if (!meMarker) map.setView(pos, 17);
       setMe(pos, h);
     }, function (err) {
@@ -591,7 +679,7 @@
     if (r0 && r0.wps && r0.segs) route = r0;
   } catch (e) {}
   function saveRoute() { try { localStorage.setItem('route', JSON.stringify(route)); } catch (e) {} }
-  var routeLine = L.polyline([], { color: '#1a73e8', weight: 8, opacity: 0.85, lineCap: 'round', lineJoin: 'round', smoothFactor: 0, noClip: true }).addTo(map);
+  var routeLine = L.polyline([], { color: '#1a73e8', weight: 8, opacity: 0.85, lineCap: 'round', lineJoin: 'round', smoothFactor: 1.2, noClip: true }).addTo(map);
   // keep the same level of detail at every zoom: line width and bump size follow the zoom level
   function applyZoomStyle() {
     var z = map.getZoom();
@@ -686,14 +774,34 @@
     if (!confirm('تمسح الطريق كله؟')) return;
     route = { wps: [], segs: [] }; saveRoute(); drawRoute(); setRouteStatus();
   };
-  function runRouteDemo() {
-    var pts = routePoints(), i = 1, pos = pts[0], h = bearing(pts[0], pts[1]);
+  // where you really are right now (fresh GPS fix); falls back to the last known position, then to null
+  function getStartPos(cb) {
+    var done = false;
+    function fin(p) { if (done) return; done = true; cb(p); }
+    if (!navigator.geolocation) { fin(mePos); return; }
+    navigator.geolocation.getCurrentPosition(function (p) {
+      fin([p.coords.latitude, p.coords.longitude]);
+    }, function () { fin(mePos); }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 });
+  }
+  // the demo drive starts from YOUR location: you drive to the closest point on the route, then follow it to the end
+  function runRouteDemo(startPos) {
+    var pts = routePoints(), connSpeed = 1.1, onConn = false;
+    if (startPos) {
+      var ni = 0, nd = 1e12;
+      for (var k = 0; k < pts.length; k++) { var dd = dist(startPos, pts[k]); if (dd < nd) { nd = dd; ni = k; } }
+      pts = [startPos].concat(pts.slice(ni));
+      onConn = true;
+      // if you're far from the route, the leg to it is sped up so it takes at most ~20 seconds
+      connSpeed = Math.max(1.1, nd / 200);
+    }
+    if (pts.length < 2) { stopDemo(); return; }
+    var i = 1, pos = pts[0], h = bearing(pts[0], pts[1]);
     // no sample bumps: the demo shows only the bumps you saved
     follow = true; btnFollow.classList.add('on');
     map.setView(pos, map.getZoom(), { animate: false });
     btnDemo.classList.add('on'); btnDemo.textContent = 'وقف التجربة';
     demoTimer = setInterval(function () {
-      var left = 1.1;
+      var left = (onConn && i <= 1) ? connSpeed : 1.1;
       while (left > 0 && i < pts.length) {
         var d = dist(pos, pts[i]);
         if (d <= left) { left -= d; pos = pts[i]; i++; }
@@ -810,10 +918,22 @@
   }
   btnDemo.onclick = function () {
     if (demoTimer) { stopDemo(); return; }
+    if (demoStarting) return;
     if (watchId !== null) btnTrack.onclick();
-    if (routePoints().length > 1) { runRouteDemo(); return; }
-    var start = bumps.length ? bumps[0] : [map.getCenter().lat, map.getCenter().lng];
-    var brg = 20, pos = move(start, (brg + 180) % 360, 400), h = brg, step = 0;
+    demoStarting = true;
+    btnDemo.textContent = 'بحدد مكانك...';
+    getStartPos(function (here) {
+      demoStarting = false;
+      if (demoTimer) return;
+      if (routePoints().length > 1) { runRouteDemo(here); return; }
+      startFreeDemo(here);
+    });
+  };
+  var demoStarting = false;
+  function startFreeDemo(here) {
+    // no route: drive from your real location (not from a saved bump or the map centre)
+    var start = here || [map.getCenter().lat, map.getCenter().lng];
+    var brg = 20, pos = start, h = brg, step = 0;
     // 20 km road would be too long to wait, so the demo uses 40 km/h and a few sample bumps
     drawBumps();
     follow = true; btnFollow.classList.add('on');
@@ -825,7 +945,7 @@
       pos = move(pos, h, 1.1);
       setMe(pos, h);
     }, 100);
-  };
+  }
 
   // data sheet
   var sheet = document.getElementById('sheet'), ta = document.getElementById('txtData');
@@ -866,7 +986,9 @@
   });
   // tap outside (on the map) closes the menu
   document.addEventListener('pointerdown', function (e) {
-    if (!e.target.closest('.bar, .menu')) closeAll();
+    if (e.target.closest('.bar, .menu, .fab')) return;
+    if (menus.tgView.hidden && menus.tgTrip.hidden) return;
+    closeAll();
   });
   // actions that move you away from the menu close it; view controls stay open so you can tap them repeatedly
   ['btnTrack', 'btnDemo', 'btnFind', 'btnRoute', 'btnAdd', 'btnHere', 'btnData'].forEach(function (id) {
