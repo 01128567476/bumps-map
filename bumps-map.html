@@ -29,6 +29,7 @@
     --danger: #ef4444;
     --shadow: 0 10px 30px rgba(15,23,42,.16), 0 2px 6px rgba(15,23,42,.08);
     --r: 22px;
+    --bar-b: calc(env(safe-area-inset-bottom, 0px) + 22px); /* leaves room under the bar for the map credit line */
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -88,18 +89,18 @@
 
   /* ---------- bottom bar + menus ---------- */
   .bar {
-    position: fixed; left: 12px; right: 12px; bottom: max(14px, env(safe-area-inset-bottom)); z-index: 1000;
-    display: flex; gap: 6px; max-width: 560px; margin: 0 auto; padding: 6px;
+    position: fixed; left: 12px; right: 12px; bottom: var(--bar-b); z-index: 1000;
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; max-width: 560px; margin: 0 auto; padding: 6px;
     background: var(--panel);
     border: 1px solid var(--line); border-radius: 26px; box-shadow: var(--shadow);
   }
   .menu {
     position: fixed; left: 12px; right: 12px; margin: 0 auto; max-width: 560px; z-index: 1001;
-    bottom: calc(max(14px, env(safe-area-inset-bottom)) + 74px);
+    bottom: calc(var(--bar-b) + 76px);
     background: var(--panel);
     border: 1px solid var(--line); border-radius: 26px;
     padding: 14px 14px 16px; box-shadow: var(--shadow);
-    max-height: 55vh; overflow-y: auto; overscroll-behavior: contain; animation: rise .22s ease-out;
+    max-height: 62vh; overflow-y: auto; overscroll-behavior: contain; animation: rise .22s ease-out;
   }
   @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.98); } }
   .menu[hidden] { display: none; }
@@ -107,11 +108,10 @@
   .menu .grp::before { content: ""; width: 4px; height: 13px; border-radius: 3px; background: linear-gradient(var(--accent), var(--accent2)); }
   .menu .grp:first-child { margin-top: 0; }
   .menu .row { display: flex; flex-wrap: wrap; gap: 8px; }
-  .menu button { box-shadow: none; background: var(--chip); border-color: transparent; }
+  .menu .row.big button { min-height: 56px; font-size: 15px; }
+  .menu button { box-shadow: none; background: var(--chip); border-color: transparent; min-height: 48px; border-radius: 16px; flex: 1 1 calc(50% - 4px); text-align: center; }
   .menu button:active { transform: scale(.96); }
   .menu button.on { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; }
-  .menu-toggle { flex: 1; padding: 14px 10px; border-radius: 20px; box-shadow: none; background: transparent; border-color: transparent; font-size: 14px; white-space: nowrap; }
-  .menu-toggle.open { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; border-color: transparent; box-shadow: 0 6px 16px rgba(37,99,235,.35); }
   button {
     font: inherit; font-size: 14px; font-weight: 600; color: var(--fg);
     background: var(--solid); border: 1px solid var(--line); border-radius: 14px;
@@ -124,6 +124,21 @@
   button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 
   /* frosted glass only while NOT driving: blurring a map that repaints every frame is what makes phones stutter */
+  /* bottom tab bar: icon over a short label, four equal tabs, nothing can overflow */
+  .tab {
+    position: relative; min-width: 0; min-height: 58px; padding: 8px 2px 6px; border-radius: 18px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    background: transparent; border-color: transparent; box-shadow: none;
+    font-size: 11.5px; font-weight: 600; color: var(--muted); white-space: nowrap;
+  }
+  .tab svg { width: 23px; height: 23px; flex: none; }
+  .tab.open { color: var(--accent); background: var(--chip); }
+  .tab.live::after {
+    content: ""; position: absolute; top: 9px; left: calc(50% + 9px); width: 9px; height: 9px; border-radius: 50%;
+    background: #22c55e; box-shadow: 0 0 0 2px var(--solid);
+  }
+  html.menu-open .fab { display: none; }
+
   @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
     html:not(.drive) .bar, html:not(.drive) .menu {
       background: var(--panel-soft); -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
@@ -195,7 +210,7 @@
 
   /* ---------- recenter button (shows when the map is not following you) ---------- */
   .fab {
-    position: fixed; left: 12px; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 76px); z-index: 1000;
+    position: fixed; left: 12px; bottom: calc(var(--bar-b) + 82px); z-index: 1000;
     width: 52px; height: 52px; padding: 0; border-radius: 50%; display: grid; place-items: center;
     color: var(--accent); background: var(--solid); box-shadow: var(--shadow);
   }
@@ -211,7 +226,7 @@
   .chip { min-height: 40px; padding: 8px 13px; font-size: 13px; box-shadow: none; background: var(--chip); border-color: transparent; }
   .pill {
     position: fixed; left: 0; right: 0; margin: 0 auto; width: max-content; z-index: 1000;
-    bottom: calc(max(14px, env(safe-area-inset-bottom)) + 76px); box-shadow: var(--shadow); border-radius: 22px; padding: 11px 22px;
+    bottom: calc(var(--bar-b) + 82px); box-shadow: var(--shadow); border-radius: 22px; padding: 11px 22px;
   }
 
   /* ---------- leaflet tweaks ---------- */
@@ -249,7 +264,7 @@
   <div class="grp">الحركة</div>
   <div class="row">
     <button id="btnFollow" class="on">الخريطة تمشي معايا</button>
-    <button id="btnRot" class="on">الشاشة تلف مع اتجاهي</button>
+    <button id="btnRot" class="on">تلف مع اتجاهي</button>
   </div>
   <div class="grp">اللف (أفقي)</div>
   <div class="row">
@@ -273,10 +288,13 @@
 
 <div class="menu" id="menuTrip" hidden>
   <div class="grp">الرحلة</div>
-  <div class="row">
+  <div class="row big">
     <button id="btnTrack">ابدأ التتبع</button>
     <button id="btnDemo">تجربة سواقة</button>
   </div>
+</div>
+
+<div class="menu" id="menuRoad" hidden>
   <div class="grp">الطريق</div>
   <div class="row">
     <button id="btnFind">اختار الطريق</button>
@@ -285,17 +303,22 @@
     <button id="btnUndo" hidden>تراجع</button>
     <button id="btnClearRoute" hidden>امسح الطريق</button>
   </div>
+</div>
+
+<div class="menu" id="menuBumps" hidden>
   <div class="grp">المطبات</div>
   <div class="row">
     <button id="btnAdd">إضافة مطب</button>
     <button id="btnHere">مطب هنا</button>
-    <button id="btnData">المطبات</button>
+    <button id="btnData">كل المطبات</button>
   </div>
 </div>
 
 <div class="bar">
-  <button class="menu-toggle" id="tgView" aria-expanded="false">🧭 الخريطة والعرض ▴</button>
-  <button class="menu-toggle" id="tgTrip" aria-expanded="false">🛣️ الرحلة والطريق والمطبات ▴</button>
+  <button class="tab" id="tgTrip" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5 19.5 21 12 16.8 4.5 21z"/></svg><span>الرحلة</span></button>
+  <button class="tab" id="tgRoad" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8.5 19H15a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h6.5"/></svg><span>الطريق</span></button>
+  <button class="tab" id="tgBumps" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.2v.1"/></svg><span>المطبات</span></button>
+  <button class="tab" id="tgView" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2.5 9.5 5-9.5 5-9.5-5z"/><path d="m2.5 12 9.5 5 9.5-5"/><path d="m2.5 16.5 9.5 5 9.5-5"/></svg><span>العرض</span></button>
 </div>
 <button class="pill" id="btnCancelPick" hidden>إلغاء الاختيار</button>
 <button class="fab" id="btnRecenter" aria-label="ارجع لموقعي" hidden>
@@ -557,6 +580,7 @@
       lastDrive = driving;
       document.documentElement.classList.toggle('drive', driving);
       if (driving) wakeOn(); else wakeOff();
+      document.getElementById('tgTrip').classList.toggle('live', driving);
       map.invalidateSize({ animate: false });
       if (follow && shown && meMarker) map.panTo(shown, { animate: false });
     }
@@ -1075,27 +1099,30 @@
 </script>
 <script>
 (function () {
-  var menus = { tgView: document.getElementById('menuView'), tgTrip: document.getElementById('menuTrip') };
+  var root = document.documentElement;
+  var pairs = { tgTrip: 'menuTrip', tgRoad: 'menuRoad', tgBumps: 'menuBumps', tgView: 'menuView' };
+  var ids = Object.keys(pairs), menus = {};
+  ids.forEach(function (id) { menus[id] = document.getElementById(pairs[id]); });
   function closeAll() {
-    Object.keys(menus).forEach(function (id) {
+    ids.forEach(function (id) {
       menus[id].hidden = true;
       var t = document.getElementById(id); t.classList.remove('open'); t.setAttribute('aria-expanded', 'false');
     });
+    root.classList.remove('menu-open');
   }
-  Object.keys(menus).forEach(function (id) {
+  ids.forEach(function (id) {
     document.getElementById(id).addEventListener('click', function () {
       var wasOpen = !menus[id].hidden;
       closeAll();
-      if (!wasOpen) { menus[id].hidden = false; this.classList.add('open'); this.setAttribute('aria-expanded', 'true'); }
+      if (!wasOpen) { menus[id].hidden = false; this.classList.add('open'); this.setAttribute('aria-expanded', 'true'); root.classList.add('menu-open'); }
     });
   });
-  // tap outside (on the map) closes the menu
+  // tap on the map closes the open menu
   document.addEventListener('pointerdown', function (e) {
     if (e.target.closest('.bar, .menu, .fab')) return;
-    if (menus.tgView.hidden && menus.tgTrip.hidden) return;
-    closeAll();
+    if (root.classList.contains('menu-open')) closeAll();
   });
-  // actions that move you away from the menu close it; view controls stay open so you can tap them repeatedly
+  // actions that take you away from the menu close it; view controls stay open so you can tap them repeatedly
   ['btnTrack', 'btnDemo', 'btnFind', 'btnReroute', 'btnRoute', 'btnAdd', 'btnHere', 'btnData'].forEach(function (id) {
     document.getElementById(id).addEventListener('click', closeAll);
   });
