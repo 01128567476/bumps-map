@@ -207,6 +207,7 @@
   /* ---------- route sheet ---------- */
   .lbl { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: -6px; }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip.dest { min-height: 48px; font-size: 14px; flex: 1 1 auto; }
   .chip { min-height: 40px; padding: 8px 13px; font-size: 13px; box-shadow: none; background: var(--chip); border-color: transparent; }
   .pill {
     position: fixed; left: 0; right: 0; margin: 0 auto; width: max-content; z-index: 1000;
@@ -304,24 +305,18 @@
 <div class="sheet" id="sheetRoute" hidden>
   <div class="card">
     <h2>اختار الطريق</h2>
-    <p>البداية بتبقى موقعك الحالي تلقائيًا. تقدر تغيّر البداية والنهاية: اكتب اسم مكان أو إحداثيات، أو اختار من الخريطة.</p>
+    <p>البداية دايمًا موقعك الحالي. اختار النهاية أو اكتبها، والخط الأزرق بيظهر.</p>
     <div class="lbl">من</div>
-    <input id="inFrom" value="موقعي الحالي" placeholder="من" autocomplete="off">
-    <div class="chips">
-      <button class="chip" id="btnFromMe">📍 موقعي الحالي</button>
-      <button class="chip" id="btnFromMap">🗺️ من الخريطة</button>
-    </div>
-    <div class="lbl">عن طريق (اختياري): حط مكان على الطريق اللي عايزه</div>
-    <input id="inVia" placeholder="عن طريق" autocomplete="off">
-    <div class="chips">
-      <button class="chip" id="btnViaMap">🗺️ من الخريطة</button>
-    </div>
+    <input id="inFrom" value="موقعي الحالي" readonly>
     <div class="lbl">إلى</div>
-    <input id="inTo" value="31.035838, 30.431895" placeholder="إلى" autocomplete="off">
     <div class="chips">
-      <button class="chip" id="btnToMe">📍 موقعي الحالي</button>
-      <button class="chip" id="btnToMap">🗺️ من الخريطة</button>
-      <button class="chip" id="btnSwap">⇅ بدّل</button>
+      <button class="chip dest" id="btnDest0">🏘️ المحمودية</button>
+      <button class="chip dest" id="btnDest1">🎓 مجمع الكليات (الأبعادية)</button>
+    </div>
+    <input id="inTo" placeholder="أو اكتب مكان النهاية" autocomplete="off" enterkeyhint="go">
+    <input id="inVia" type="hidden">
+    <div class="chips">
+      <button class="chip" id="btnToMap">🗺️ اختار من الخريطة</button>
     </div>
     <p id="routeMsg"></p>
     <div class="row">
@@ -607,13 +602,13 @@
   }
 
   // GPS
-  var watchId = null, lastPos = null, gpsH = null, btnTrack = document.getElementById('btnTrack');
+  var watchId = null, lastPos = null, gpsH = null, routeSynced = false, btnTrack = document.getElementById('btnTrack');
   btnTrack.onclick = function () {
     if (watchId !== null) {
       navigator.geolocation.clearWatch(watchId); watchId = null; btnTrack.classList.remove('on'); btnTrack.textContent = 'ابدأ التتبع'; return;
     }
     if (!navigator.geolocation) { txtEl.innerHTML = '<b>الجهاز مش بيدعم الـ GPS</b>'; return; }
-    stopDemo(); gpsH = null;
+    stopDemo(); gpsH = null; routeSynced = false;
     btnTrack.classList.add('on'); btnTrack.textContent = 'وقف التتبع';
     watchId = navigator.geolocation.watchPosition(function (p) {
       var pos = [p.coords.latitude, p.coords.longitude], h = p.coords.heading, sp = p.coords.speed;
@@ -624,6 +619,7 @@
       if (typeof h === 'number' && !isNaN(h)) { gpsH = (gpsH === null) ? h : (gpsH + angDiff(gpsH, h) * 0.45 + 360) % 360; h = gpsH; }
       if (!meMarker) map.setView(pos, 17);
       setMe(pos, h);
+      if (!routeSynced) { routeSynced = true; syncRouteStart(pos); }
     }, function (err) {
       txtEl.innerHTML = '<b>مش قادر أجيب موقعك</b><br>اسمح للمتصفح باستخدام الموقع';
       btnTrack.classList.remove('on'); btnTrack.textContent = 'ابدأ التتبع'; watchId = null;
@@ -703,6 +699,7 @@
   try {
     var r0 = JSON.parse(localStorage.getItem('route') || 'null');
     if (r0 && r0.wps && r0.segs) route = r0;
+    if (route.fromMe === undefined && route.wps[0] && Math.abs(route.wps[0][0] - 31.18389) < 0.001 && Math.abs(route.wps[0][1] - 30.52417) < 0.001) route.fromMe = true;
   } catch (e) {}
   function saveRoute() { try { localStorage.setItem('route', JSON.stringify(route)); } catch (e) {} }
   var routeLine = L.polyline([], { color: '#1a73e8', weight: 8, opacity: 0.85, lineCap: 'round', lineJoin: 'round', smoothFactor: 1.2, noClip: true }).addTo(map);
@@ -764,6 +761,7 @@
   var routeBusy = false;
   function addWaypoint(p) {
     if (routeBusy) return;
+    route.fromMe = false; // a hand-drawn road keeps its own start
     var n = route.wps.length;
     if (n === 0) { route.wps.push(p); saveRoute(); drawRoute(); setRouteStatus(); return; }
     var a = route.wps[n - 1];
@@ -800,6 +798,25 @@
     if (!confirm('تمسح الطريق كله؟')) return;
     route = { wps: [], segs: [] }; saveRoute(); drawRoute(); setRouteStatus();
   };
+  // a route made "from my location" is rebuilt from where you really are when you start driving/tracking,
+  // so the green dot and the blue line always start at you (same destination)
+  function syncRouteStart(p, done) {
+    if (!route.fromMe || route.wps.length < 2 || dist(p, route.wps[0]) <= 25) { if (done) done(); return; }
+    var d = route.wps[route.wps.length - 1];
+    fetch('https://router.project-osrm.org/route/v1/driving/' + p[1] + ',' + p[0] + ';' + d[1] + ',' + d[0] + '?overview=full&geometries=geojson')
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j.routes || !j.routes[0]) return;
+        var c = j.routes[0].geometry.coordinates.map(function (x) { return [x[1], x[0]]; });
+        var a0 = [+p[0].toFixed(6), +p[1].toFixed(6)];
+        if (dist(a0, c[0]) > 2) c.unshift(a0);
+        if (dist(d, c[c.length - 1]) > 2) c.push(d);
+        route = { wps: [a0, d], segs: [c], fromMe: true };
+        saveRoute(); drawRoute();
+      })
+      .catch(function () {})
+      .then(function () { if (done) done(); });
+  }
   // where you really are right now (fresh GPS fix); falls back to the last known position, then to null
   function getStartPos(cb) {
     var done = false;
@@ -846,11 +863,18 @@
   // route by place names (geocoding + road routing)
   var ME_TXT = 'موقعي الحالي';
   function isMe(q) { return /^\s*(موقعي|مكاني|my location)/i.test(q); }
+  // the two places this road is used for: typing their name (or tapping the button) needs no search service
+  var DESTS = [
+    { label: 'المحمودية', re: /محمودي/, pt: [31.18389, 30.52417] },
+    { label: 'مجمع الكليات (الأبعادية)', re: /مجمع الكليات|الأبعادية|الابعادية|ابعادية/, pt: [31.035838, 30.431895] }
+  ];
+  function matchDest(q) { for (var i = 0; i < DESTS.length; i++) if (DESTS[i].re.test(q)) return DESTS[i].pt.slice(); return null; }
   function geocode(q) {
     // "my location" = a fresh GPS fix, so the route always starts from where you are right now
     if (isMe(q)) return new Promise(function (res, rej) {
       getStartPos(function (p) { if (p) res([+p[0].toFixed(6), +p[1].toFixed(6)]); else rej(new Error('gps')); });
     });
+    var dp = matchDest(q); if (dp) return Promise.resolve(dp);
     var m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)\s*$/);
     if (m) return Promise.resolve([parseFloat(m[1]), parseFloat(m[2])]);
     function nominatim(x) {
@@ -885,14 +909,18 @@
   document.getElementById('btnFind').onclick = function () {
     sheetRoute.hidden = false; routeMsg.textContent = '';
     if (!inFrom.value.trim()) inFrom.value = ME_TXT;
-    if (isMe(inFrom.value) || isMe(inTo.value)) getStartPos(function (p) {
+    getStartPos(function (p) {
       if (p && !sheetRoute.hidden && !routeMsg.textContent) routeMsg.textContent = 'مكانك الحالي: ' + p[0].toFixed(5) + ', ' + p[1].toFixed(5);
     });
   };
   document.getElementById('btnCloseRoute').onclick = function () { sheetRoute.hidden = true; };
-  document.getElementById('btnFromMe').onclick = function () { inFrom.value = ME_TXT; };
-  document.getElementById('btnToMe').onclick = function () { inTo.value = ME_TXT; };
-  document.getElementById('btnSwap').onclick = function () { var t = inFrom.value; inFrom.value = inTo.value; inTo.value = t; };
+  // one tap on a destination = the blue line appears
+  function goTo(i) { inTo.value = DESTS[i].label; document.getElementById('btnGo').onclick(); }
+  document.getElementById('btnDest0').onclick = function () { goTo(0); };
+  document.getElementById('btnDest1').onclick = function () { goTo(1); };
+  inTo.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); inTo.blur(); document.getElementById('btnGo').onclick(); }
+  });
 
   // pick a start / via / end point by tapping the map
   var pickTarget = null;
@@ -908,13 +936,11 @@
   }
   function endPick() { pickTarget = null; btnCancelPick.hidden = true; updateCursor(); idleStatus(); }
   btnCancelPick.onclick = function () { endPick(); sheetRoute.hidden = false; };
-  document.getElementById('btnFromMap').onclick = function () { startPick('inFrom'); };
-  document.getElementById('btnViaMap').onclick = function () { startPick('inVia'); };
   document.getElementById('btnToMap').onclick = function () { startPick('inTo'); };
 
   document.getElementById('btnGo').onclick = function () {
-    var f = inFrom.value.trim() || ME_TXT, v = inVia.value.trim(), t = inTo.value.trim();
-    if (!t) { routeMsg.textContent = 'اكتب النهاية'; return; }
+    var f = ME_TXT, v = inVia.value.trim(), t = inTo.value.trim();
+    if (!t) { routeMsg.textContent = 'اختار أو اكتب مكان النهاية'; return; }
     if (isMe(f) && isMe(t)) { routeMsg.textContent = 'البداية والنهاية نفس المكان'; return; }
     routeMsg.textContent = (isMe(f) || isMe(t)) ? 'بحدد موقعك...' : 'بدور على الأماكن...';
     var places = [geocode(f)];
@@ -932,7 +958,7 @@
           var a0 = pts[0], z0 = pts[pts.length - 1];
           if (dist(a0, c[0]) > 2) c.unshift(a0);
           if (dist(z0, c[c.length - 1]) > 2) c.push(z0);
-          route = { wps: [a0, z0], segs: [c] };
+          route = { wps: [a0, z0], segs: [c], fromMe: isMe(f) };
           saveRoute(); drawRoute();
           showRouteDestinationUp();
           follow = false; btnFollow.classList.remove('on');
@@ -999,7 +1025,12 @@
     getStartPos(function (here) {
       demoStarting = false;
       if (demoTimer) return;
-      if (routePoints().length > 1) { runRouteDemo(here); return; }
+      if (routePoints().length > 1) {
+        if (!here) { runRouteDemo(here); return; }
+        demoStarting = true; btnDemo.textContent = 'بجهّز الطريق...';
+        syncRouteStart(here, function () { demoStarting = false; if (!demoTimer) runRouteDemo(here); });
+        return;
+      }
       startFreeDemo(here);
     });
   };
