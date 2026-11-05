@@ -526,7 +526,8 @@
       if (!map._animatingZoom) {
         // leaflet rounds pans to whole pixels: skip frames where the move would be under a pixel (no useless map events)
         var mpp = 40075016.686 * Math.cos(shown[0] * toRad) / (256 * Math.pow(2, map.getZoom()));
-        if (dist(map.getCenter(), shown) >= mpp * 0.8) map.panTo(shown, { animate: false });
+        var cc = map.getCenter(); // a LatLng object, not an [lat, lng] pair
+        if (dist([cc.lat, cc.lng], shown) >= mpp * 0.8) map.panTo(shown, { animate: false });
       }
       mapCost = mapCost * 0.8 + (performance.now() - c0) * 0.2;
       mapGap = mapCost > 14 ? 50 : mapCost > 7 ? 33 : 16;
@@ -633,6 +634,7 @@
     }
     if (!navigator.geolocation) { txtEl.innerHTML = '<b>الجهاز مش بيدعم الـ GPS</b>'; return; }
     stopDemo(); gpsH = null; routeSynced = false;
+    follow = true; btnFollow.classList.add('on');
     btnTrack.classList.add('on'); btnTrack.textContent = 'وقف التتبع';
     watchId = navigator.geolocation.watchPosition(function (p) {
       var pos = [p.coords.latitude, p.coords.longitude], h = p.coords.heading, sp = p.coords.speed;
