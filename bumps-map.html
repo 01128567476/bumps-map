@@ -662,6 +662,23 @@
     updateBanner();
   }
 
+  // the tilt desyncs the dot from the blue line / green dot, so it is removed the moment a drive starts (and restored after)
+  function flattenForDrive() {
+    if (typeof hasPitch === 'undefined' || !hasPitch) return;
+    try { var cp = map.getPitch(); if (cp) { prePitch = cp; map.setPitch(0, { animate: false }); } } catch (e) {}
+  }
+  // puts the blue dot EXACTLY on a point of the route (no sliding from wherever it was before), index 0 = the green start dot
+  function placeMeOnRoute(pos, hdg) {
+    if (glideRaf) { cancelAnimationFrame(glideRaf); glideRaf = null; }
+    glide = null; lastFixT = 0; lastFrameT = 0;
+    var pts = routeGeom();
+    snapIdx = 0; routeOn = pts.length > 1; curArc = routeOn ? 0 : -1;
+    mePos = pos; shown = pos;
+    if (typeof hdg === 'number' && !isNaN(hdg)) { heading = hdg; shownH = hdg; }
+    if (!meMarker) meMarker = L.marker(pos, { icon: meIcon, zIndexOffset: 1000 }).addTo(map);
+    else meMarker.setLatLng(pos);
+    updateBanner();
+  }
   // while driving (demo or real GPS) with "the map follows me" on, the arrow is the fixed anchor: touching the screen can't pan
   // the map away from it, and zoom (pinch, wheel, double tap) works around the centre where the arrow is. Zoom/rotate/tilt
   // all pivot on the arrow. When you're not driving, or you turn following off, the map behaves normally.
@@ -702,7 +719,7 @@
       // so the map is flattened for the drive and the tilt comes back when the drive stops
       if (typeof hasPitch !== 'undefined' && hasPitch) {
         try {
-          if (driving) { prePitch = map.getPitch(); if (prePitch) map.setPitch(0, { animate: false }); }
+          if (driving) flattenForDrive();
           else if (prePitch) { map.setPitch(prePitch, { animate: false }); prePitch = 0; }
         } catch (e) {}
       }
@@ -1093,19 +1110,14 @@
   }
   // the demo drive starts from YOUR location: you drive to the closest point on the route, then follow it to the end
   function runRouteDemo(startPos) {
+    // the blue dot starts exactly on the green start dot (first point of the route), then drives the whole route
     var pts = routePoints(), connSpeed = 1.1, onConn = false;
-    if (startPos) {
-      var ni = 0, nd = 1e12;
-      for (var k = 0; k < pts.length; k++) { var dd = dist(startPos, pts[k]); if (dd < nd) { nd = dd; ni = k; } }
-      pts = [startPos].concat(pts.slice(ni));
-      onConn = true;
-      // if you're far from the route, the leg to it is sped up so it takes at most ~20 seconds
-      connSpeed = Math.max(1.1, nd / 200);
-    }
     if (pts.length < 2) { stopDemo(); return; }
     var i = 1, pos = pts[0], h = bearing(pts[0], pts[1]);
     // no sample bumps: the demo shows only the bumps you saved
     follow = true; btnFollow.classList.add('on');
+    flattenForDrive();
+    placeMeOnRoute(pos, h);
     map.setView(pos, map.getZoom(), { animate: false });
     btnDemo.classList.add('on'); btnDemo.textContent = 'وقف التجربة';
     demoTimer = setInterval(function () {
@@ -1309,6 +1321,7 @@
     // 20 km road would be too long to wait, so the demo uses 40 km/h and a few sample bumps
     drawBumps();
     follow = true; btnFollow.classList.add('on');
+    flattenForDrive();
     map.setView(pos, map.getZoom(), { animate: false });
     btnDemo.classList.add('on'); btnDemo.textContent = 'وقف التجربة';
     demoTimer = setInterval(function () {
