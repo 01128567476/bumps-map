@@ -225,7 +225,7 @@
     bottom: calc(var(--bar-b) + 82px); box-shadow: var(--shadow); border-radius: 22px; padding: 11px 22px;
   }
 
-  .wp { border-radius: 50%; border: 2.5px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,.45); box-sizing: border-box; }
+  .wp { border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,.45); box-sizing: border-box; }
 
   /* ---------- leaflet tweaks ---------- */
   .leaflet-container { font-family: inherit; }
@@ -848,7 +848,7 @@
     route.wps.forEach(function (w, i) {
       var last = i === route.wps.length - 1 && i > 0;
       // normal map markers (not a vector overlay): they move with the map tiles, exactly like the bump icons
-      var d = (i === 0 || last) ? 22 : 13, col = i === 0 ? '#16a34a' : (last ? '#dc2626' : '#1a73e8');
+      var d = (i === 0 || last) ? 15 : 11, col = i === 0 ? '#16a34a' : (last ? '#dc2626' : '#1a73e8');
       L.marker(w, { interactive: false, keyboard: false, icon: L.divIcon({ className: '', iconSize: [d, d], iconAnchor: [d / 2, d / 2],
         html: '<div class="wp" style="width:' + d + 'px;height:' + d + 'px;background:' + col + '"></div>' }) }).addTo(wpLayer);
     });
