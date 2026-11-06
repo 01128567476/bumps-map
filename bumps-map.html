@@ -503,6 +503,47 @@
     var mpp = 40075016.686 * Math.cos(shown[0] * toRad) / (256 * Math.pow(2, map.getZoom()));
     return move(shown, (360 - map.getBearing()) % 360, curOff * mpp);
   }
+  // ---- smooth follow ----
+  // panTo() fires map events and re-checks the tiles on every call: doing that every frame is the stutter. Here the map layer is
+  // slid by a fractional amount every frame with no events at all (the call Leaflet itself uses while you drag), and the normal
+  // heavy update (loading tiles) runs about 3 times a second. The dot is placed right after, from the same numbers, so it stays
+  // on its spot of the screen and on the line. Every frame the result is checked against where the dot must appear; if this map
+  // build does not accept the fast path it switches itself off and the old panTo path is used.
+  var panMode = 0, panBad = 0, panDead = typeof map._rawPanBy !== 'function', lastSyncT = 0, lastSlowT = 0, pinching = false;
+  function rotOff(o, a) { var r = a * toRad, c = Math.cos(r), sn = Math.sin(r); return L.point(o.x * c - o.y * sn, o.x * sn + o.y * c); }
+  function modeOff(o, m) { if (m === 0) return o; var b = map.getBearing() || 0; return rotOff(o, m === 1 ? b : -b); }
+  function anchorErr() {
+    var sz = map.getSize(), cp = map.latLngToContainerPoint(L.latLng(shown[0], shown[1]));
+    return Math.sqrt(Math.pow(cp.x - sz.x / 2, 2) + Math.pow(cp.y - (sz.y / 2 + curOff), 2));
+  }
+  function slowPan(now, tg) {
+    if (now - lastSlowT < mapGap - 5) return;
+    lastSlowT = now;
+    var mpp = 40075016.686 * Math.cos(shown[0] * toRad) / (256 * Math.pow(2, map.getZoom()));
+    var cc = map.getCenter();
+    if (dist([cc.lat, cc.lng], tg) >= mpp * 0.45) map.panTo(tg, { animate: false });
+  }
+  function followPan(now) {
+    var tg = followTarget(); if (!tg || !shown) return;
+    if (panDead) { slowPan(now, tg); return; }
+    try {
+      var sz = map.getSize(), z = map.getZoom();
+      var off = map.project(L.latLng(tg[0], tg[1]), z).subtract(map.project(map.getCenter(), z));
+      if (Math.abs(off.x) > sz.x * 0.35 || Math.abs(off.y) > sz.y * 0.35) { map.panTo(tg, { animate: false }); lastSyncT = now; return; } // far: reload the view
+      if (Math.abs(off.x) + Math.abs(off.y) > 0.02) {
+        var ok = false;
+        for (var k = 0; k < 3 && !ok; k++) {
+          var m = (panMode + k) % 3, o = modeOff(off, m);
+          map._rawPanBy(o);
+          if (anchorErr() < 5) { panMode = m; ok = true; }
+          else map._rawPanBy(L.point(-o.x, -o.y));       // wrong convention for this build: undo, try the next one
+        }
+        if (!ok) { if (++panBad >= 4) panDead = true; map.panTo(tg, { animate: false }); lastSyncT = now; return; }
+        panBad = 0;
+      }
+      if (now - lastSyncT > 350) { lastSyncT = now; map.fire('moveend'); }   // lets the map load the tiles ahead
+    } catch (e) { panDead = true; }
+  }
   function glideFrame(now) {
     var g = glide;
     if (!g || !meMarker) { glideRaf = null; return; }
@@ -527,22 +568,20 @@
       if (meArrow) meArrow.style.transform = rot;
       meArrowFixed.style.transform = rot;
     }
-    if (follow && now - lastMapT >= mapGap - 5) {
-      lastMapT = now;
-      var c0 = performance.now();
-      // heading-up: the map turns, so the arrow always points to the top of the screen
-      if (headingUp && map.setBearing) {
-        var wantB = (360 - shownH) % 360;
-        if (Math.abs(angDiff(map.getBearing(), wantB)) > 0.5) map.setBearing(wantB, { animate: false });
+    if (follow && !map._animatingZoom && !pinching) {
+      // turning the map is the expensive part, so it is throttled adaptively; sliding it (followPan) is cheap and runs every frame
+      if (now - lastMapT >= mapGap - 5) {
+        lastMapT = now;
+        var c0 = performance.now();
+        // heading-up: the map turns, so the arrow always points to the top of the screen
+        if (headingUp && map.setBearing) {
+          var wantB = (360 - shownH) % 360;
+          if (Math.abs(angDiff(map.getBearing(), wantB)) > 0.5) map.setBearing(wantB, { animate: false });
+        }
+        mapCost = mapCost * 0.8 + (performance.now() - c0) * 0.2;
+        mapGap = mapCost > 14 ? 50 : mapCost > 7 ? 33 : 16;
       }
-      if (!map._animatingZoom) {
-        // leaflet rounds pans to whole pixels: skip frames where the move would be under a pixel (no useless map events)
-        var mpp = 40075016.686 * Math.cos(shown[0] * toRad) / (256 * Math.pow(2, map.getZoom()));
-        var cc = map.getCenter(), tg = followTarget(); // getCenter is a LatLng object, not an [lat, lng] pair
-        if (dist([cc.lat, cc.lng], tg) >= mpp * 0.45) map.panTo(tg, { animate: false });
-      }
-      mapCost = mapCost * 0.8 + (performance.now() - c0) * 0.2;
-      mapGap = mapCost > 14 ? 50 : mapCost > 7 ? 33 : 16;
+      followPan(now);
     }
     // the dot is placed AFTER the map moved, every frame: it is always exactly on its real position, so it can never drift off the road
     meMarker.setLatLng(shown);
@@ -551,7 +590,8 @@
   }
   // keep the dot ON the blue line: GPS is a few metres off and a fix cuts across curves, so while you are within 30 m of the
   // route the position is projected onto it (like navigation apps do), and the heading follows the road ahead
-  function snapToRoute(pos, hdg) {
+  function snapToRoute(pos, hdg, acc) {
+    var SNAP_R = Math.max(30, Math.min(60, (acc || 0) * 1.2));
     var pts = routePts || (routePts = routePoints());
     var n = pts.length; if (n < 2) return null;
     var kx = 111320 * Math.cos(pos[0] * toRad), ky = 111320;
@@ -570,8 +610,8 @@
       return best;
     }
     var b = scan(snapIdx - 60, snapIdx + 260);              // near where we were: cheap
-    if (!b || b.d > 30) b = scan(0, n - 1);                 // lost it: look at the whole road
-    if (!b || b.d > 30) return null;
+    if (!b || b.d > SNAP_R) b = scan(0, n - 1);             // lost it: look at the whole road
+    if (!b || b.d > SNAP_R) return null;
     snapIdx = b.i;
     var A = pts[b.i], B = pts[b.i + 1];
     var p = [A[0] + (B[0] - A[0]) * b.u, A[1] + (B[1] - A[1]) * b.u];
@@ -582,8 +622,8 @@
     var useRoad = (typeof hdg !== 'number' || isNaN(hdg)) || Math.abs(angDiff(hdg, rb)) < 70;
     return { p: p, brg: useRoad ? rb : hdg };
   }
-  function setMe(pos, hdg) {
-    var sn = snapToRoute(pos, hdg);
+  function setMe(pos, hdg, acc) {
+    var sn = snapToRoute(pos, hdg, acc);
     if (sn) { pos = sn.p; hdg = sn.brg; }
     mePos = pos;
     if (typeof hdg === 'number' && !isNaN(hdg)) heading = hdg;
@@ -707,7 +747,7 @@
       // low-pass the heading so the rotating map doesn't twitch on every noisy fix
       if (typeof h === 'number' && !isNaN(h)) { gpsH = (gpsH === null) ? h : (gpsH + angDiff(gpsH, h) * 0.45 + 360) % 360; h = gpsH; }
       if (!meMarker) map.setView(pos, 17);
-      setMe(pos, h);
+      setMe(pos, h, p.coords.accuracy);
       // the first fix is often a rough network guess (hundreds of metres off): wait for an accurate one (<= 40 m),
       // or give up waiting after 10 fixes, then rebuild the route from there so the green dot is exactly where you are
       if (!routeSynced) {
@@ -740,6 +780,10 @@
   document.getElementById('btnRotR').onclick = function () { turnBy(15); };
   document.getElementById('btnNorth').onclick = function () { manualRot(); map.setBearing(0, { animate: true, duration: 0.3 }); };
   var mc = map.getContainer();
+  mc.addEventListener('touchstart', function (e) { if (e.touches && e.touches.length > 1) pinching = true; }, { passive: true });
+  function pinchEnd(e) { if (!e.touches || e.touches.length < 2) pinching = false; }
+  mc.addEventListener('touchend', pinchEnd, { passive: true });
+  mc.addEventListener('touchcancel', pinchEnd, { passive: true });
   function userRot() { if (!dragLocked) manualRot(); } // while driving with follow on, gestures can't switch heading-up off
   mc.addEventListener('touchstart', function (e) { if (e.touches && e.touches.length > 1) userRot(); }, { passive: true });
   mc.addEventListener('mousedown', function (e) { if (e.button === 2 || e.ctrlKey) userRot(); });
