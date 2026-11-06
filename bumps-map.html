@@ -192,7 +192,7 @@
   /* the dot stays at the screen centre, exactly where it is before you start tracking */
   .me-fixed { position: fixed; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; z-index: 900; pointer-events: none; }
   .me-fixed[hidden] { display: none; }
-  .bump { width: 26px; height: 26px; position: relative; transform: scale(var(--bs, 1)); transition: transform .15s; }
+  .bump { width: 26px; height: 26px; position: relative; transform: scale(var(--bs, .72)); transition: transform .15s; }
   .bump i {
     position: absolute; inset: 3px; background: linear-gradient(145deg, #fcd34d, #f59e0b); border: 2px solid #fff;
     transform: rotate(45deg); border-radius: 7px; box-shadow: 0 3px 8px rgba(0,0,0,.4);
@@ -831,7 +831,7 @@
   // keep the same level of detail at every zoom: bump size follows the zoom level
   function applyZoomStyle() {
     var z = map.getZoom();
-    map.getContainer().style.setProperty('--bs', z <= 9 ? 0.5 : z <= 12 ? 0.65 : z <= 14 ? 0.8 : 1);
+    map.getContainer().style.setProperty('--bs', z <= 9 ? 0.36 : z <= 12 ? 0.48 : z <= 14 ? 0.58 : 0.72);
   }
   map.on('zoomend', applyZoomStyle); applyZoomStyle();
   var wpLayer = L.layerGroup().addTo(map);
