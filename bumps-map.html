@@ -225,6 +225,8 @@
     bottom: calc(var(--bar-b) + 82px); box-shadow: var(--shadow); border-radius: 22px; padding: 11px 22px;
   }
 
+  .wp { border-radius: 50%; border: 2.5px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,.45); box-sizing: border-box; }
+
   /* ---------- leaflet tweaks ---------- */
   .leaflet-container { font-family: inherit; }
   .leaflet-top { margin-top: calc(max(12px, env(safe-area-inset-top)) + 82px); }
@@ -781,11 +783,54 @@
     if (route.fromMe === undefined && route.wps[0] && Math.abs(route.wps[0][0] - 31.18389) < 0.001 && Math.abs(route.wps[0][1] - 30.52417) < 0.001) route.fromMe = true;
   } catch (e) {}
   function saveRoute() { try { localStorage.setItem('route', JSON.stringify(route)); } catch (e) {} }
-  var routeLine = L.polyline([], { color: '#1a73e8', weight: 8, opacity: 0.85, lineCap: 'round', lineJoin: 'round', smoothFactor: 0.4, noClip: true }).addTo(map);
-  // keep the same level of detail at every zoom: line width and bump size follow the zoom level
+  // The blue road is drawn INSIDE a tile layer, like the map itself: every tile is a small canvas that holds a piece of the line.
+  // So it is pinched, zoomed, rotated and dragged by exactly the same code as the map tiles, and can never separate from the map.
+  // (A normal vector line lives in a separate overlay that has to be re-aligned after every gesture, and on phones it falls behind.)
+  var routeVer = 0, rcache = { z: -1, ver: -1, xs: null, ys: null };
+  var DPR = Math.min(2, window.devicePixelRatio || 1), BLEED = 1;
+  function routeWeight(z) { return z <= 9 ? 3 : z <= 12 ? 4 : z <= 14 ? 5 : z <= 16 ? 7 : 9; }
+  function routeWorld(z) {
+    if (rcache.z === z && rcache.ver === routeVer) return rcache;
+    var pts = routePts || (routePts = routePoints()), n = pts.length, xs = new Float64Array(n), ys = new Float64Array(n);
+    for (var i = 0; i < n; i++) { var q = map.project(L.latLng(pts[i][0], pts[i][1]), z); xs[i] = q.x; ys[i] = q.y; }
+    rcache = { z: z, ver: routeVer, xs: xs, ys: ys };
+    return rcache;
+  }
+  var routeTiles = L.gridLayer({ tileSize: 256, zIndex: 5, opacity: 0.92, keepBuffer: 3, maxZoom: 22 });
+  routeTiles.createTile = function (c) {
+    var size = this.getTileSize().x, tile = L.DomUtil.create('canvas', 'leaflet-tile');
+    var px = (size + BLEED * 2) * DPR;
+    tile.width = px; tile.height = px;
+    var W = routeWorld(c.z), n = W.xs.length;
+    if (n < 2) return tile;
+    var ctx = tile.getContext('2d'), w = routeWeight(c.z);
+    var ox = c.x * size - BLEED, oy = c.y * size - BLEED, lim = size + BLEED * 2, pad = w + 4;
+    ctx.scale(DPR, DPR); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    // one path with only the segments that touch this tile
+    ctx.beginPath();
+    var open = false;
+    for (var i = 0; i < n - 1; i++) {
+      var x0 = W.xs[i] - ox, y0 = W.ys[i] - oy, x1 = W.xs[i + 1] - ox, y1 = W.ys[i + 1] - oy;
+      if ((x0 < -pad && x1 < -pad) || (y0 < -pad && y1 < -pad) || (x0 > lim + pad && x1 > lim + pad) || (y0 > lim + pad && y1 > lim + pad)) { open = false; continue; }
+      if (!open) ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1); open = true;
+    }
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = w + 3; ctx.stroke();   // thin white edge so the line reads on any map colour
+    ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = w; ctx.stroke();
+    return tile;
+  };
+  // each tile is drawn 1px bigger than its slot and shifted back, so neighbouring tiles overlap and no hairline seam shows
+  var initTileBase = routeTiles._initTile;
+  routeTiles._initTile = function (tile) {
+    initTileBase.call(this, tile);
+    var sz = this.getTileSize().x + BLEED * 2;
+    tile.style.width = sz + 'px'; tile.style.height = sz + 'px';
+    tile.style.marginLeft = -BLEED + 'px'; tile.style.marginTop = -BLEED + 'px';
+  };
+  routeTiles.addTo(map);
+  // keep the same level of detail at every zoom: bump size follows the zoom level
   function applyZoomStyle() {
     var z = map.getZoom();
-    routeLine.setStyle({ weight: z <= 9 ? 3 : z <= 12 ? 4 : z <= 14 ? 5 : z <= 16 ? 7 : 9 });
     map.getContainer().style.setProperty('--bs', z <= 9 ? 0.5 : z <= 12 ? 0.65 : z <= 14 ? 0.8 : 1);
   }
   map.on('zoomend', applyZoomStyle); applyZoomStyle();
@@ -798,12 +843,14 @@
   var routePts = null, snapIdx = 0;
   function drawRoute() {
     routePts = null; snapIdx = 0;
-    routeLine.setLatLngs(routePoints());
+    routeVer++; routeTiles.redraw();
     wpLayer.clearLayers();
     route.wps.forEach(function (w, i) {
       var last = i === route.wps.length - 1 && i > 0;
-      L.circleMarker(w, { radius: (i === 0 || last) ? 9 : 5, color: '#fff', weight: 2,
-        fillColor: i === 0 ? '#16a34a' : (last ? '#dc2626' : '#1a73e8'), fillOpacity: 1 }).addTo(wpLayer);
+      // normal map markers (not a vector overlay): they move with the map tiles, exactly like the bump icons
+      var d = (i === 0 || last) ? 22 : 13, col = i === 0 ? '#16a34a' : (last ? '#dc2626' : '#1a73e8');
+      L.marker(w, { interactive: false, keyboard: false, icon: L.divIcon({ className: '', iconSize: [d, d], iconAnchor: [d / 2, d / 2],
+        html: '<div class="wp" style="width:' + d + 'px;height:' + d + 'px;background:' + col + '"></div>' }) }).addTo(wpLayer);
     });
   }
   // open with the destination at the TOP of the screen: turn the map so the direction start -> destination points up,
