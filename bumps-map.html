@@ -189,11 +189,7 @@
   }
   .me .dot { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px; background: #fff; border-radius: 50%; border: 3.5px solid #2563eb; box-shadow: 0 2px 6px rgba(0,0,0,.35); }
   .leaflet-map-pane { will-change: transform; }
-  /* while driving, the map container extends below the screen so its centre (where the dot sits and where zoom/rotate pivot)
-     is 68% of the way down: the dot is closer to the bottom edge and you see more road ahead */
-  html.drive #map { bottom: -36vh; }
-  html.drive .me-fixed { top: 68%; }
-  html.drive .leaflet-bottom { margin-bottom: 36vh; }
+  /* the dot stays at the screen centre, exactly where it is before you start tracking */
   .me-fixed { position: fixed; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; z-index: 900; pointer-events: none; }
   .me-fixed[hidden] { display: none; }
   .bump { width: 26px; height: 26px; position: relative; transform: scale(var(--bs, 1)); transition: transform .15s; }
@@ -489,7 +485,7 @@
   // The expensive part is moving/rotating the map, so it is throttled adaptively: if a map update is slow on this phone
   // the gap between updates grows (60 -> 30 -> 20 fps), so the motion stays even instead of stuttering.
   var shown = null, shownH = 0, glide = null, glideRaf = null, fixDur = 1000, lastFixT = 0, lastBrg = null, fixedOn = null;
-  var lastMapT = 0, mapGap = 16, mapCost = 0, lastRot = '', meArrow = null;
+  var lastFrameT = 0, lastMapT = 0, mapGap = 16, mapCost = 0, lastRot = '', meArrow = null;
   var meFixed = document.getElementById('meFixed'), meArrowFixed = document.getElementById('meArrowFixed');
   function angDiff(a, b) { return ((b - a + 540) % 360) - 180; }
   // while following, the arrow is a fixed element at the screen centre (the map slides under it, so it never wobbles
@@ -504,7 +500,11 @@
     if (!g || !meMarker) { glideRaf = null; return; }
     var t = Math.min(1, (now - g.t0) / g.dur);
     shown = [g.from[0] + (g.to[0] - g.from[0]) * t, g.from[1] + (g.to[1] - g.from[1]) * t];
-    shownH = (g.h0 + angDiff(g.h0, g.h1) * t + 360) % 360;
+    // heading eases toward the target on its own clock (not per GPS fix): a 90-degree corner becomes a smooth turn
+    // of about half a second instead of the whole map snapping round in one frame
+    var dtF = Math.min(0.1, Math.max(0.001, (now - (lastFrameT || now)) / 1000)); lastFrameT = now;
+    var dH = angDiff(shownH, heading);
+    shownH = (shownH + dH * (1 - Math.exp(-dtF / 0.22)) + 360) % 360;
     syncMeMode();
     var headingUp = rotateMode && follow;
     var rot = 'rotate(' + (headingUp ? 0 : Math.round(shownH)) + 'deg)';
@@ -532,8 +532,8 @@
       mapCost = mapCost * 0.8 + (performance.now() - c0) * 0.2;
       mapGap = mapCost > 14 ? 50 : mapCost > 7 ? 33 : 16;
     }
-    if (t < 1) glideRaf = requestAnimationFrame(glideFrame);
-    else { glide = null; glideRaf = null; meMarker.setLatLng(shown); }
+    if (t < 1 || Math.abs(angDiff(shownH, heading)) > 0.4) glideRaf = requestAnimationFrame(glideFrame);
+    else { glide = null; glideRaf = null; lastFrameT = 0; meMarker.setLatLng(shown); }
   }
   function setMe(pos, hdg) {
     mePos = pos;
@@ -546,7 +546,7 @@
     var nowT = performance.now();
     if (lastFixT) { var dtFix = nowT - lastFixT; if (dtFix > 30 && dtFix < 4000) fixDur = fixDur * 0.6 + dtFix * 0.4; }
     lastFixT = nowT;
-    glide = { from: shown, to: pos, h0: shownH, h1: heading, t0: nowT, dur: Math.max(60, fixDur * 1.15) };
+    glide = { from: shown, to: pos, t0: nowT, dur: Math.max(60, fixDur * 1.15) };
     if (!glideRaf) glideRaf = requestAnimationFrame(glideFrame);
     updateBanner();
   }
