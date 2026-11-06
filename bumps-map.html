@@ -643,7 +643,7 @@
   // while driving (demo or real GPS) with "the map follows me" on, the arrow is the fixed anchor: touching the screen can't pan
   // the map away from it, and zoom (pinch, wheel, double tap) works around the centre where the arrow is. Zoom/rotate/tilt
   // all pivot on the arrow. When you're not driving, or you turn following off, the map behaves normally.
-  var dragLocked = null, lastDrive = false;
+  var dragLocked = null, lastDrive = false, prePitch = 0;
   var fab = document.getElementById('btnRecenter');
   // always visible: one tap puts the view back the way it should be (follow me, heading-up, normal zoom, normal tilt)
   var RESET_ZOOM = 17;
@@ -652,7 +652,7 @@
     rotateMode = true; btnRot.classList.add('on');
     if (dragMode) setDragMode(dragMode);        // leave drag-to-rotate / drag-to-tilt so the map can follow again
     lastBrg = null;
-    if (hasPitch) { try { map.setPitch(START_PITCH, { animate: false }); } catch (e) {} }
+    if (hasPitch) { try { map.setPitch(lastDrive ? 0 : START_PITCH, { animate: false }); } catch (e) {} }
     if (shown) map.setView(shown, RESET_ZOOM, { animate: false });
     else { map.setBearing(0, { animate: false }); map.setZoom(RESET_ZOOM, { animate: false }); }
     if (mePos) setMe(mePos, heading);
@@ -676,6 +676,14 @@
       lastDrive = driving;
       document.documentElement.classList.toggle('drive', driving);
       if (driving) wakeOn(); else wakeOff();
+      // the 3D tilt makes the dot drift from its spot while the map follows it (it only snaps right after a zoom),
+      // so the map is flattened for the drive and the tilt comes back when the drive stops
+      if (typeof hasPitch !== 'undefined' && hasPitch) {
+        try {
+          if (driving) { prePitch = map.getPitch(); if (prePitch) map.setPitch(0, { animate: false }); }
+          else if (prePitch) { map.setPitch(prePitch, { animate: false }); prePitch = 0; }
+        } catch (e) {}
+      }
       document.getElementById('tgTrip').classList.toggle('live', driving);
       map.invalidateSize({ animate: false });
       if (!driving) curOff = 0;
