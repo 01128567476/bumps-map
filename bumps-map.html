@@ -675,13 +675,13 @@
   }
 
   // GPS
-  var watchId = null, lastPos = null, gpsH = null, routeSynced = false, btnTrack = document.getElementById('btnTrack');
+  var watchId = null, lastPos = null, gpsH = null, routeSynced = false, syncTries = 0, btnTrack = document.getElementById('btnTrack');
   btnTrack.onclick = function () {
     if (watchId !== null) {
       navigator.geolocation.clearWatch(watchId); watchId = null; btnTrack.classList.remove('on'); btnTrack.textContent = 'ابدأ التتبع'; return;
     }
     if (!navigator.geolocation) { txtEl.innerHTML = '<b>الجهاز مش بيدعم الـ GPS</b>'; return; }
-    stopDemo(); gpsH = null; routeSynced = false;
+    stopDemo(); gpsH = null; routeSynced = false; syncTries = 0;
     follow = true; btnFollow.classList.add('on');
     btnTrack.classList.add('on'); btnTrack.textContent = 'وقف التتبع';
     watchId = navigator.geolocation.watchPosition(function (p) {
@@ -693,7 +693,12 @@
       if (typeof h === 'number' && !isNaN(h)) { gpsH = (gpsH === null) ? h : (gpsH + angDiff(gpsH, h) * 0.45 + 360) % 360; h = gpsH; }
       if (!meMarker) map.setView(pos, 17);
       setMe(pos, h);
-      if (!routeSynced) { routeSynced = true; syncRouteStart(pos); }
+      // the first fix is often a rough network guess (hundreds of metres off): wait for an accurate one (<= 40 m),
+      // or give up waiting after 10 fixes, then rebuild the route from there so the green dot is exactly where you are
+      if (!routeSynced) {
+        syncTries++;
+        if (p.coords.accuracy <= 40 || syncTries >= 10) { routeSynced = true; syncRouteStart(pos); }
+      }
     }, function (err) {
       txtEl.innerHTML = '<b>مش قادر أجيب موقعك</b><br>اسمح للمتصفح باستخدام الموقع';
       btnTrack.classList.remove('on'); btnTrack.textContent = 'ابدأ التتبع'; watchId = null;
