@@ -319,7 +319,7 @@
   <button class="tab" id="tgView" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2.5 9.5 5-9.5 5-9.5-5z"/><path d="m2.5 12 9.5 5 9.5-5"/><path d="m2.5 16.5 9.5 5 9.5-5"/></svg><span>العرض</span></button>
 </div>
 <button class="pill" id="btnCancelPick" hidden>إلغاء الاختيار</button>
-<button class="fab" id="btnRecenter" aria-label="ارجع لموقعي" hidden>
+<button class="fab" id="btnRecenter" aria-label="رجّع الزوم واللف والمتابعة">
   <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3.6"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg>
 </button>
 
@@ -605,9 +605,16 @@
   // all pivot on the arrow. When you're not driving, or you turn following off, the map behaves normally.
   var dragLocked = null, lastDrive = false;
   var fab = document.getElementById('btnRecenter');
+  // always visible: one tap puts the view back the way it should be (follow me, heading-up, normal zoom, normal tilt)
+  var RESET_ZOOM = 17;
   fab.onclick = function () {
     follow = true; btnFollow.classList.add('on');
-    if (shown) map.setView(shown, Math.max(map.getZoom(), 16), { animate: false });
+    rotateMode = true; btnRot.classList.add('on');
+    if (dragMode) setDragMode(dragMode);        // leave drag-to-rotate / drag-to-tilt so the map can follow again
+    lastBrg = null;
+    if (hasPitch) { try { map.setPitch(START_PITCH, { animate: false }); } catch (e) {} }
+    if (shown) map.setView(shown, RESET_ZOOM, { animate: false });
+    else { map.setBearing(0, { animate: false }); map.setZoom(RESET_ZOOM, { animate: false }); }
     if (mePos) setMe(mePos, heading);
   };
   // keep the screen on while driving, otherwise the phone locks mid-trip
@@ -623,7 +630,6 @@
   document.addEventListener('visibilitychange', function () { if (!document.hidden && lastDrive) wakeOn(); });
   function syncLock() {
     syncMeMode();
-    fab.hidden = !(mePos && !follow);
     var driving = (typeof watchId !== 'undefined' && watchId !== null) || !!demoTimer;
     var lock = !!(follow && driving);
     if (driving !== lastDrive) {
