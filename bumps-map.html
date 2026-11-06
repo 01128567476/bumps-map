@@ -491,9 +491,8 @@
   // while following, the arrow is a fixed element at the screen centre (the map slides under it, so it never wobbles
   // from pixel rounding); when the map is free (you dragged it) the normal map marker is used instead
   function syncMeMode() {
-    if (!meMarker || follow === fixedOn) return;
-    fixedOn = follow; meFixed.hidden = !follow; meMarker.setOpacity(follow ? 0 : 1);
-    if (!follow && shown) meMarker.setLatLng(shown);
+    if (!meMarker || fixedOn === false) return;
+    fixedOn = false; meFixed.hidden = true; meMarker.setOpacity(1);
   }
   // while driving, the dot sits lower on the screen (about 70% down) so you see more road ahead. This is done by shifting
   // the map centre forward along the heading, not by resizing the map, and it eases in smoothly when the drive starts.
@@ -505,7 +504,9 @@
   function glideFrame(now) {
     var g = glide;
     if (!g || !meMarker) { glideRaf = null; return; }
-    var t = Math.min(1, (now - g.t0) / g.dur);
+    // t runs past 1 when the next fix is late: the dot keeps going at the same speed (up to 1.3x the usual gap) instead of
+    // stopping and then jumping when the fix finally arrives. GPS fixes are never perfectly regular, this hides it.
+    var t = Math.max(0, Math.min(1.3, (now - g.t0) / g.dur));
     shown = [g.from[0] + (g.to[0] - g.from[0]) * t, g.from[1] + (g.to[1] - g.from[1]) * t];
     // heading eases toward the target on its own clock (not per GPS fix): a 90-degree corner becomes a smooth turn
     // of about half a second instead of the whole map snapping round in one frame
@@ -516,8 +517,6 @@
     var wantOff = (follow && lastDrive) ? map.getSize().y * 0.2 : 0;
     curOff += (wantOff - curOff) * (1 - Math.exp(-dtF / 0.35));
     if (Math.abs(wantOff - curOff) < 0.5) curOff = wantOff;
-    var offStr = curOff ? 'translateY(' + curOff.toFixed(1) + 'px)' : '';
-    if (offStr !== lastOffStr) { lastOffStr = offStr; meFixed.style.transform = offStr; }
     var headingUp = rotateMode && follow;
     var rot = 'rotate(' + (headingUp ? 0 : Math.round(shownH)) + 'deg)';
     if (rot !== lastRot) {
@@ -526,8 +525,7 @@
       if (meArrow) meArrow.style.transform = rot;
       meArrowFixed.style.transform = rot;
     }
-    if (!follow) meMarker.setLatLng(shown);
-    else if (now - lastMapT >= mapGap) {
+    if (follow && now - lastMapT >= mapGap - 5) {
       lastMapT = now;
       var c0 = performance.now();
       // heading-up: the map turns, so the arrow always points to the top of the screen
@@ -539,12 +537,14 @@
         // leaflet rounds pans to whole pixels: skip frames where the move would be under a pixel (no useless map events)
         var mpp = 40075016.686 * Math.cos(shown[0] * toRad) / (256 * Math.pow(2, map.getZoom()));
         var cc = map.getCenter(), tg = followTarget(); // getCenter is a LatLng object, not an [lat, lng] pair
-        if (dist([cc.lat, cc.lng], tg) >= mpp * 0.8) map.panTo(tg, { animate: false });
+        if (dist([cc.lat, cc.lng], tg) >= mpp * 0.45) map.panTo(tg, { animate: false });
       }
       mapCost = mapCost * 0.8 + (performance.now() - c0) * 0.2;
       mapGap = mapCost > 14 ? 50 : mapCost > 7 ? 33 : 16;
     }
-    if (t < 1 || Math.abs(angDiff(shownH, heading)) > 0.4 || curOff !== wantOff) glideRaf = requestAnimationFrame(glideFrame);
+    // the dot is placed AFTER the map moved, every frame: it is always exactly on its real position, so it can never drift off the road
+    meMarker.setLatLng(shown);
+    if (t < 1.3 || Math.abs(angDiff(shownH, heading)) > 0.4 || curOff !== wantOff) glideRaf = requestAnimationFrame(glideFrame);
     else { glide = null; glideRaf = null; lastFrameT = 0; meMarker.setLatLng(shown); }
   }
   // keep the dot ON the blue line: GPS is a few metres off and a fix cuts across curves, so while you are within 30 m of the
@@ -630,7 +630,7 @@
       if (driving) wakeOn(); else wakeOff();
       document.getElementById('tgTrip').classList.toggle('live', driving);
       map.invalidateSize({ animate: false });
-      if (!driving) { curOff = 0; lastOffStr = ''; meFixed.style.transform = ''; }
+      if (!driving) curOff = 0;
       if (follow && shown && meMarker) map.panTo(followTarget(), { animate: false });
     }
     if (lock) { if (map.dragging.enabled()) map.dragging.disable(); }
