@@ -271,8 +271,8 @@
     <button id="btnRotR">لف يمين ⟳</button>
     <button id="btnNorth">الشمال فوق</button>
   </div>
-  <div class="grp">الميل (رأسي)</div>
-  <div class="row">
+  <div class="grp" id="grpTilt">الميل (رأسي)</div>
+  <div class="row" id="rowTilt">
     <button id="btnTiltDrag">اسحب للميل</button>
     <button id="btnTiltUp">ميل ⬆</button>
     <button id="btnTiltDn">ميل ⬇</button>
@@ -386,7 +386,7 @@
   var map = L.map('map', {
     zoomControl: false, attributionControl: true,
     rotate: true, bearing: 0, touchRotate: true, touchPitch: true, rotateControl: { closeOnZeroBearing: false },
-    maxBoundsViscosity: 1.0, zoomSnap: 0.25, minZoom: 4, bounceAtZoomLimits: false
+    maxBoundsViscosity: 1.0, zoomSnap: 0.25, minZoom: 4, maxZoom: 19, bounceAtZoomLimits: false
   }).setView([30.0444, 31.2357], 16);
   // Egypt only: lock the view to Egypt, never zoom out further than the level where all of Egypt fits the screen
   map.setMaxBounds(EGYPT.pad(0.02)); // set after setView (rotate plugin needs the view first)
@@ -415,7 +415,7 @@
   };
   var baseName = 'esri'; // default
   try { if (localStorage.getItem('base2') === 'carto') baseName = 'carto'; } catch (e) {}
-  var tileErrs = 0;
+  var tileErrs = 0, lastSwitch = 0;
   function useBase(name, save) {
     if (baseDefs[baseName] && map.hasLayer(baseDefs[baseName].layer)) map.removeLayer(baseDefs[baseName].layer);
     baseName = name; tileErrs = 0;
@@ -428,7 +428,7 @@
     lyr.on('tileload', function () { if (k === baseName) tileErrs = 0; });
     lyr.on('tileerror', function () {
       // many failures in a row with nothing loading = this provider is down: switch to the other one
-      if (k === baseName && ++tileErrs >= 12) useBase(k === 'carto' ? 'esri' : 'carto', false);
+      if (k === baseName && ++tileErrs >= 12 && Date.now() - lastSwitch > 30000) { lastSwitch = Date.now(); useBase(k === 'carto' ? 'esri' : 'carto', false); }
     });
   });
   useBase(baseName, false);
@@ -533,7 +533,7 @@
       // heading-up: the map turns, so the arrow always points to the top of the screen
       if (headingUp && map.setBearing) {
         var wantB = (360 - shownH) % 360;
-        if (lastBrg === null || Math.abs(angDiff(lastBrg, wantB)) > 0.5) { lastBrg = wantB; map.setBearing(wantB, { animate: false }); }
+        if (Math.abs(angDiff(map.getBearing(), wantB)) > 0.5) map.setBearing(wantB, { animate: false });
       }
       if (!map._animatingZoom) {
         // leaflet rounds pans to whole pixels: skip frames where the move would be under a pixel (no useless map events)
@@ -656,8 +656,15 @@
     if (distEl.textContent !== d) distEl.textContent = d;
     if (txtEl.innerHTML !== html) txtEl.innerHTML = html;
   }
+  var flashUntil = 0, flashT = null;
+  function flash(msg) {
+    flashUntil = performance.now() + 1700;
+    setBanner('banner', '✓', '<b>' + msg + '</b>');
+    clearTimeout(flashT);
+    flashT = setTimeout(function () { flashUntil = 0; if (mePos) updateBanner(); else idleStatus(); }, 1750);
+  }
   function updateBanner() {
-    if (!mePos || pickTarget) return;
+    if (!mePos || pickTarget || performance.now() < flashUntil) return;
     var all = bumps.concat(demoBumps), best = null, bestD = 1e9;
     all.forEach(function (b) {
       var d = dist(mePos, b);
@@ -702,8 +709,13 @@
         if (p.coords.accuracy <= 40 || syncTries >= 10) { routeSynced = true; syncRouteStart(pos); }
       }
     }, function (err) {
-      txtEl.innerHTML = '<b>مش قادر أجيب موقعك</b><br>اسمح للمتصفح باستخدام الموقع';
-      btnTrack.classList.remove('on'); btnTrack.textContent = 'ابدأ التتبع'; watchId = null;
+      if (err && err.code === 1) {   // permission refused: stop
+        try { navigator.geolocation.clearWatch(watchId); } catch (x) {}
+        txtEl.innerHTML = '<b>مش قادر أجيب موقعك</b><br>اسمح للمتصفح باستخدام الموقع';
+        btnTrack.classList.remove('on'); btnTrack.textContent = 'ابدأ التتبع'; watchId = null;
+      } else if (performance.now() >= flashUntil) {   // weak signal / timeout (tunnel, bridge): keep watching, it recovers by itself
+        setBanner('banner', '--', '<b>الإشارة ضعيفة</b><br>بدوّر على موقعك...');
+      }
     }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
   };
 
@@ -722,13 +734,16 @@
   document.getElementById('btnRotR').onclick = function () { turnBy(15); };
   document.getElementById('btnNorth').onclick = function () { manualRot(); map.setBearing(0, { animate: true, duration: 0.3 }); };
   var mc = map.getContainer();
-  mc.addEventListener('touchstart', function (e) { if (e.touches && e.touches.length > 1) manualRot(); }, { passive: true });
-  mc.addEventListener('mousedown', function (e) { if (e.button === 2 || e.ctrlKey) manualRot(); });
-  mc.addEventListener('wheel', function (e) { if (e.shiftKey) manualRot(); }, { passive: true });
+  function userRot() { if (!dragLocked) manualRot(); } // while driving with follow on, gestures can't switch heading-up off
+  mc.addEventListener('touchstart', function (e) { if (e.touches && e.touches.length > 1) userRot(); }, { passive: true });
+  mc.addEventListener('mousedown', function (e) { if (e.button === 2 || e.ctrlKey) userRot(); });
+  mc.addEventListener('wheel', function (e) { if (e.shiftKey) userRot(); }, { passive: true });
   // drag modes: 'rot' = turn the map flat around the centre, 'tilt' = tilt it forward/back (vertical rotation)
   var dragMode = null, rdActive = false, rdStartAng = 0, rdStartBrg = 0, rdStartY = 0, rdStartPitch = 0;
   var btnRotDrag = document.getElementById('btnRotDrag'), btnTiltDrag = document.getElementById('btnTiltDrag');
   var MAX_PITCH = 70;
+  var hasPitch = typeof map.setPitch === 'function' && typeof map.getPitch === 'function';
+  if (!hasPitch) { document.getElementById('grpTilt').style.display = 'none'; document.getElementById('rowTilt').style.display = 'none'; }
   function angAt(e) {
     var r = mc.getBoundingClientRect();
     return Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)) * 180 / Math.PI;
@@ -742,13 +757,13 @@
   }
   btnRotDrag.onclick = function () { setDragMode('rot'); };
   btnTiltDrag.onclick = function () { setDragMode('tilt'); };
-  function tiltBy(d) { map.setPitch(Math.max(0, Math.min(MAX_PITCH, map.getPitch() + d)), { animate: true, duration: 0.25 }); }
+  function tiltBy(d) { if (!hasPitch) return; map.setPitch(Math.max(0, Math.min(MAX_PITCH, map.getPitch() + d)), { animate: true, duration: 0.25 }); }
   document.getElementById('btnTiltUp').onclick = function () { tiltBy(10); };
   document.getElementById('btnTiltDn').onclick = function () { tiltBy(-10); };
-  document.getElementById('btnFlat').onclick = function () { map.setPitch(0, { animate: true, duration: 0.3 }); };
+  document.getElementById('btnFlat').onclick = function () { if (hasPitch) map.setPitch(0, { animate: true, duration: 0.3 }); };
   mc.addEventListener('pointerdown', function (e) {
     if (!dragMode || e.target.closest('.leaflet-control, button')) return;
-    rdActive = true; rdStartAng = angAt(e); rdStartBrg = map.getBearing(); rdStartY = e.clientY; rdStartPitch = map.getPitch();
+    rdActive = true; rdStartAng = angAt(e); rdStartBrg = map.getBearing(); rdStartY = e.clientY; rdStartPitch = hasPitch ? map.getPitch() : 0;
     try { mc.setPointerCapture(e.pointerId); } catch (x) {}
     mc.style.cursor = 'grabbing'; e.preventDefault();
   });
@@ -758,7 +773,7 @@
       map.setBearing(((rdStartBrg + angAt(e) - rdStartAng) % 360 + 360) % 360);
     } else {
       // drag up = tilt more, drag down = flatten
-      map.setPitch(Math.max(0, Math.min(MAX_PITCH, rdStartPitch + (rdStartY - e.clientY) * 0.4)));
+      if (hasPitch) map.setPitch(Math.max(0, Math.min(MAX_PITCH, rdStartPitch + (rdStartY - e.clientY) * 0.4)));
     }
   });
   function rdEnd() { rdActive = false; if (dragMode) mc.style.cursor = 'grab'; }
@@ -793,30 +808,47 @@
     if (rcache.z === z && rcache.ver === routeVer) return rcache;
     var pts = routePts || (routePts = routePoints()), n = pts.length, xs = new Float64Array(n), ys = new Float64Array(n);
     for (var i = 0; i < n; i++) { var q = map.project(L.latLng(pts[i][0], pts[i][1]), z); xs[i] = q.x; ys[i] = q.y; }
-    rcache = { z: z, ver: routeVer, xs: xs, ys: ys };
+    // start / end / via dots sit ON the line and are drawn in the same tiles, so they can never drift away from it
+    var dots = [];
+    function addDot(ll, k) { var q = map.project(L.latLng(ll[0], ll[1]), z); dots.push({ x: q.x, y: q.y, k: k }); }
+    if (n >= 2) {
+      addDot(pts[0], 0); addDot(pts[n - 1], 1);
+      for (var sI = 0; sI < route.segs.length - 1; sI++) { var sg = route.segs[sI]; if (sg.length) addDot(sg[sg.length - 1], 2); }
+    } else if (route.wps.length) addDot(route.wps[0], 0);
+    dots.sort(function (a, b) { return b.k - a.k; }); // via dots first, start/end on top
+    rcache = { z: z, ver: routeVer, xs: xs, ys: ys, dots: dots };
     return rcache;
   }
-  var routeTiles = L.gridLayer({ tileSize: 256, zIndex: 5, opacity: 0.92, keepBuffer: 3, maxZoom: 22 });
+  var routeTiles = L.gridLayer({ tileSize: 256, zIndex: 5, opacity: 0.92, keepBuffer: 3, maxZoom: 19 });
   routeTiles.createTile = function (c) {
     var size = this.getTileSize().x, tile = L.DomUtil.create('canvas', 'leaflet-tile');
     var px = (size + BLEED * 2) * DPR;
     tile.width = px; tile.height = px;
     var W = routeWorld(c.z), n = W.xs.length;
-    if (n < 2) return tile;
+    if (n < 2 && !W.dots.length) return tile;
     var ctx = tile.getContext('2d'), w = routeWeight(c.z);
     var ox = c.x * size - BLEED, oy = c.y * size - BLEED, lim = size + BLEED * 2, pad = w + 4;
     ctx.scale(DPR, DPR); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    // one path with only the segments that touch this tile
-    ctx.beginPath();
-    var open = false;
-    for (var i = 0; i < n - 1; i++) {
-      var x0 = W.xs[i] - ox, y0 = W.ys[i] - oy, x1 = W.xs[i + 1] - ox, y1 = W.ys[i + 1] - oy;
-      if ((x0 < -pad && x1 < -pad) || (y0 < -pad && y1 < -pad) || (x0 > lim + pad && x1 > lim + pad) || (y0 > lim + pad && y1 > lim + pad)) { open = false; continue; }
-      if (!open) ctx.moveTo(x0, y0);
-      ctx.lineTo(x1, y1); open = true;
+    if (n >= 2) {
+      // one path with only the segments that touch this tile
+      ctx.beginPath();
+      var open = false;
+      for (var i = 0; i < n - 1; i++) {
+        var x0 = W.xs[i] - ox, y0 = W.ys[i] - oy, x1 = W.xs[i + 1] - ox, y1 = W.ys[i + 1] - oy;
+        if ((x0 < -pad && x1 < -pad) || (y0 < -pad && y1 < -pad) || (x0 > lim + pad && x1 > lim + pad) || (y0 > lim + pad && y1 > lim + pad)) { open = false; continue; }
+        if (!open) ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1); open = true;
+      }
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = w + 3; ctx.stroke();   // thin white edge so the line reads on any map colour
+      ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = w; ctx.stroke();
     }
-    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = w + 3; ctx.stroke();   // thin white edge so the line reads on any map colour
-    ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = w; ctx.stroke();
+    var DOT_COL = ['#16a34a', '#dc2626', '#1a73e8'], sc = c.z <= 12 ? 0.8 : 1;   // start green, end red, via blue
+    W.dots.forEach(function (d) {
+      var x = d.x - ox, y = d.y - oy, r = (d.k < 2 ? 5.5 : 4) * sc, ro = r + 2;
+      if (x < -ro || y < -ro || x > lim + ro || y > lim + ro) return;
+      ctx.beginPath(); ctx.arc(x, y, ro, 0, 6.2832); ctx.fillStyle = '#ffffff'; ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fillStyle = DOT_COL[d.k]; ctx.fill();
+    });
     return tile;
   };
   // each tile is drawn 1px bigger than its slot and shifted back, so neighbouring tiles overlap and no hairline seam shows
@@ -844,14 +876,14 @@
   function drawRoute() {
     routePts = null; snapIdx = 0;
     routeVer++; routeTiles.redraw();
-    wpLayer.clearLayers();
-    route.wps.forEach(function (w, i) {
-      var last = i === route.wps.length - 1 && i > 0;
-      // normal map markers (not a vector overlay): they move with the map tiles, exactly like the bump icons
-      var d = (i === 0 || last) ? 15 : 11, col = i === 0 ? '#16a34a' : (last ? '#dc2626' : '#1a73e8');
-      L.marker(w, { interactive: false, keyboard: false, icon: L.divIcon({ className: '', iconSize: [d, d], iconAnchor: [d / 2, d / 2],
-        html: '<div class="wp" style="width:' + d + 'px;height:' + d + 'px;background:' + col + '"></div>' }) }).addTo(wpLayer);
-    });
+    wpLayer.clearLayers(); // (the start / end / via dots are drawn inside the route tiles now)
+  }
+  // the router snaps to the nearest street. When the chosen point is near the street the street point itself is the end of the
+  // line (no little hook at the ends); only a point far from any street keeps a connecting leg
+  function fitEnds(c, a0, z0) {
+    if (dist(a0, c[0]) > 60) c.unshift(a0);
+    if (dist(z0, c[c.length - 1]) > 60) c.push(z0);
+    return c;
   }
   // open with the destination at the TOP of the screen: turn the map so the direction start -> destination points up,
   // then zoom so the whole route fits the rotated screen
@@ -929,17 +961,15 @@
   // a route made "from my location" is rebuilt from where you really are when you start driving/tracking,
   // so the green dot and the blue line always start at you (same destination)
   function syncRouteStart(p, done) {
-    if (!route.fromMe || route.wps.length < 2 || dist(p, route.wps[0]) <= 25) { if (done) done(); return; }
+    if (!route.fromMe || route.wps.length < 2 || dist(p, route.wps[0]) <= 45) { if (done) done(); return; }
     var d = route.wps[route.wps.length - 1];
     fetch('https://router.project-osrm.org/route/v1/driving/' + p[1] + ',' + p[0] + ';' + d[1] + ',' + d[0] + '?overview=full&geometries=geojson')
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (!j.routes || !j.routes[0]) return;
         var c = j.routes[0].geometry.coordinates.map(function (x) { return [x[1], x[0]]; });
-        var a0 = [+p[0].toFixed(6), +p[1].toFixed(6)];
-        if (dist(a0, c[0]) > 2) c.unshift(a0);
-        if (dist(d, c[c.length - 1]) > 2) c.push(d);
-        route = { wps: [a0, d], segs: [c], fromMe: true };
+        c = fitEnds(c, [+p[0].toFixed(6), +p[1].toFixed(6)], d);
+        route = { wps: [c[0], c[c.length - 1]], segs: [c], fromMe: true };
         saveRoute(); drawRoute();
       })
       .catch(function () {})
@@ -1083,10 +1113,8 @@
           if (!j.routes || !j.routes[0]) throw new Error('route');
           var c = j.routes[0].geometry.coordinates.map(function (x) { return [x[1], x[0]]; });
           // the router snaps to the nearest street: make the green dot and the blue line start (and end) exactly at the chosen points
-          var a0 = pts[0], z0 = pts[pts.length - 1];
-          if (dist(a0, c[0]) > 2) c.unshift(a0);
-          if (dist(z0, c[c.length - 1]) > 2) c.push(z0);
-          route = { wps: [a0, z0], segs: [c], fromMe: isMe(f) };
+          c = fitEnds(c, pts[0], pts[pts.length - 1]);
+          route = { wps: [c[0], c[c.length - 1]], segs: [c], fromMe: isMe(f) };
           saveRoute(); drawRoute();
           showRouteDestinationUp();
           follow = false; btnFollow.classList.remove('on');
@@ -1134,35 +1162,39 @@
   });
   document.getElementById('btnHere').onclick = function () {
     if (!mePos) { txtEl.innerHTML = '<b>شغّل التتبع الأول</b>'; return; }
-    bumps.push([+mePos[0].toFixed(6), +mePos[1].toFixed(6)]);
-    saveBumps(); drawBumps();
+    var hp = [+mePos[0].toFixed(6), +mePos[1].toFixed(6)];
+    var dup = bumps.some(function (b) { return dist(b, hp) < 8; });
+    if (!dup) { bumps.push(hp); saveBumps(); drawBumps(); }
+    try { if (navigator.vibrate) navigator.vibrate(60); } catch (e) {}
+    flash(dup ? 'المطب ده مسجل قبل كده' : 'اتسجل مطب هنا');
   };
 
   // demo drive
   var demoTimer = null, btnDemo = document.getElementById('btnDemo');
   function stopDemo() {
     if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
+    demoReq++; demoStarting = false; // cancels a demo that is still waiting for the location / route
     demoBumps = []; aheadKey = null; btnDemo.classList.remove('on'); btnDemo.textContent = 'تجربة سواقة'; drawBumps();
   }
   btnDemo.onclick = function () {
-    if (demoTimer) { stopDemo(); return; }
-    if (demoStarting) return;
+    if (demoTimer || demoStarting) { stopDemo(); return; }
     if (watchId !== null) btnTrack.onclick();
-    demoStarting = true;
+    var my = ++demoReq; demoStarting = true;
     btnDemo.textContent = 'بحدد مكانك...';
     getStartPos(function (here) {
+      if (my !== demoReq) return;
       demoStarting = false;
       if (demoTimer) return;
       if (routePoints().length > 1) {
         if (!here) { runRouteDemo(here); return; }
         demoStarting = true; btnDemo.textContent = 'بجهّز الطريق...';
-        syncRouteStart(here, function () { demoStarting = false; if (!demoTimer) runRouteDemo(here); });
+        syncRouteStart(here, function () { if (my !== demoReq) return; demoStarting = false; if (!demoTimer) runRouteDemo(here); });
         return;
       }
       startFreeDemo(here);
     });
   };
-  var demoStarting = false;
+  var demoStarting = false, demoReq = 0;
   function startFreeDemo(here) {
     // no route: drive from your real location (not from a saved bump or the map centre)
     var start = here || [map.getCenter().lat, map.getCenter().lng];
