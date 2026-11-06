@@ -485,7 +485,7 @@
   // The expensive part is moving/rotating the map, so it is throttled adaptively: if a map update is slow on this phone
   // the gap between updates grows (60 -> 30 -> 20 fps), so the motion stays even instead of stuttering.
   var shown = null, shownH = 0, glide = null, glideRaf = null, fixDur = 1000, lastFixT = 0, lastBrg = null, fixedOn = null;
-  var lastFrameT = 0, lastMapT = 0, mapGap = 16, mapCost = 0, lastRot = '', meArrow = null;
+  var curOff = 0, lastOffStr = '', lastFrameT = 0, lastMapT = 0, mapGap = 16, mapCost = 0, lastRot = '', meArrow = null;
   var meFixed = document.getElementById('meFixed'), meArrowFixed = document.getElementById('meArrowFixed');
   function angDiff(a, b) { return ((b - a + 540) % 360) - 180; }
   // while following, the arrow is a fixed element at the screen centre (the map slides under it, so it never wobbles
@@ -494,6 +494,13 @@
     if (!meMarker || follow === fixedOn) return;
     fixedOn = follow; meFixed.hidden = !follow; meMarker.setOpacity(follow ? 0 : 1);
     if (!follow && shown) meMarker.setLatLng(shown);
+  }
+  // while driving, the dot sits lower on the screen (about 70% down) so you see more road ahead. This is done by shifting
+  // the map centre forward along the heading, not by resizing the map, and it eases in smoothly when the drive starts.
+  function followTarget() {
+    if (!curOff || !shown) return shown;
+    var mpp = 40075016.686 * Math.cos(shown[0] * toRad) / (256 * Math.pow(2, map.getZoom()));
+    return move(shown, (360 - map.getBearing()) % 360, curOff * mpp);
   }
   function glideFrame(now) {
     var g = glide;
@@ -506,6 +513,11 @@
     var dH = angDiff(shownH, heading);
     shownH = (shownH + dH * (1 - Math.exp(-dtF / 0.22)) + 360) % 360;
     syncMeMode();
+    var wantOff = (follow && lastDrive) ? map.getSize().y * 0.2 : 0;
+    curOff += (wantOff - curOff) * (1 - Math.exp(-dtF / 0.35));
+    if (Math.abs(wantOff - curOff) < 0.5) curOff = wantOff;
+    var offStr = curOff ? 'translateY(' + curOff.toFixed(1) + 'px)' : '';
+    if (offStr !== lastOffStr) { lastOffStr = offStr; meFixed.style.transform = offStr; }
     var headingUp = rotateMode && follow;
     var rot = 'rotate(' + (headingUp ? 0 : Math.round(shownH)) + 'deg)';
     if (rot !== lastRot) {
@@ -526,16 +538,51 @@
       if (!map._animatingZoom) {
         // leaflet rounds pans to whole pixels: skip frames where the move would be under a pixel (no useless map events)
         var mpp = 40075016.686 * Math.cos(shown[0] * toRad) / (256 * Math.pow(2, map.getZoom()));
-        var cc = map.getCenter(); // a LatLng object, not an [lat, lng] pair
-        if (dist([cc.lat, cc.lng], shown) >= mpp * 0.8) map.panTo(shown, { animate: false });
+        var cc = map.getCenter(), tg = followTarget(); // getCenter is a LatLng object, not an [lat, lng] pair
+        if (dist([cc.lat, cc.lng], tg) >= mpp * 0.8) map.panTo(tg, { animate: false });
       }
       mapCost = mapCost * 0.8 + (performance.now() - c0) * 0.2;
       mapGap = mapCost > 14 ? 50 : mapCost > 7 ? 33 : 16;
     }
-    if (t < 1 || Math.abs(angDiff(shownH, heading)) > 0.4) glideRaf = requestAnimationFrame(glideFrame);
+    if (t < 1 || Math.abs(angDiff(shownH, heading)) > 0.4 || curOff !== wantOff) glideRaf = requestAnimationFrame(glideFrame);
     else { glide = null; glideRaf = null; lastFrameT = 0; meMarker.setLatLng(shown); }
   }
+  // keep the dot ON the blue line: GPS is a few metres off and a fix cuts across curves, so while you are within 30 m of the
+  // route the position is projected onto it (like navigation apps do), and the heading follows the road ahead
+  function snapToRoute(pos, hdg) {
+    var pts = routePts || (routePts = routePoints());
+    var n = pts.length; if (n < 2) return null;
+    var kx = 111320 * Math.cos(pos[0] * toRad), ky = 111320;
+    function seg(i) {
+      var ax = (pts[i][1] - pos[1]) * kx, ay = (pts[i][0] - pos[0]) * ky, bx = (pts[i + 1][1] - pos[1]) * kx, by = (pts[i + 1][0] - pos[0]) * ky;
+      var dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, u = l2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / l2)) : 0;
+      var px = ax + dx * u, py = ay + dy * u;
+      return { d: Math.sqrt(px * px + py * py), u: u };
+    }
+    function scan(from, to) {
+      var best = null;
+      for (var i = Math.max(0, from); i < Math.min(n - 1, to); i++) {
+        var r = seg(i);
+        if (!best || r.d < best.d) { best = r; best.i = i; }
+      }
+      return best;
+    }
+    var b = scan(snapIdx - 60, snapIdx + 260);              // near where we were: cheap
+    if (!b || b.d > 30) b = scan(0, n - 1);                 // lost it: look at the whole road
+    if (!b || b.d > 30) return null;
+    snapIdx = b.i;
+    var A = pts[b.i], B = pts[b.i + 1];
+    var p = [A[0] + (B[0] - A[0]) * b.u, A[1] + (B[1] - A[1]) * b.u];
+    // heading of the road about 12 m ahead of the dot
+    var j = b.i + 1, acc = dist(p, B), tgt = B;
+    while (acc < 12 && j < n - 1) { acc += dist(pts[j], pts[j + 1]); j++; tgt = pts[j]; }
+    var rb = dist(p, tgt) > 0.5 ? bearing(p, tgt) : bearing(A, B);
+    var useRoad = (typeof hdg !== 'number' || isNaN(hdg)) || Math.abs(angDiff(hdg, rb)) < 70;
+    return { p: p, brg: useRoad ? rb : hdg };
+  }
   function setMe(pos, hdg) {
+    var sn = snapToRoute(pos, hdg);
+    if (sn) { pos = sn.p; hdg = sn.brg; }
     mePos = pos;
     if (typeof hdg === 'number' && !isNaN(hdg)) heading = hdg;
     if (!meMarker) {
@@ -546,7 +593,7 @@
     var nowT = performance.now();
     if (lastFixT) { var dtFix = nowT - lastFixT; if (dtFix > 30 && dtFix < 4000) fixDur = fixDur * 0.6 + dtFix * 0.4; }
     lastFixT = nowT;
-    glide = { from: shown, to: pos, t0: nowT, dur: Math.max(60, fixDur * 1.15) };
+    glide = { from: shown, to: pos, t0: nowT, dur: Math.max(60, fixDur) };
     if (!glideRaf) glideRaf = requestAnimationFrame(glideFrame);
     updateBanner();
   }
@@ -583,7 +630,8 @@
       if (driving) wakeOn(); else wakeOff();
       document.getElementById('tgTrip').classList.toggle('live', driving);
       map.invalidateSize({ animate: false });
-      if (follow && shown && meMarker) map.panTo(shown, { animate: false });
+      if (!driving) { curOff = 0; lastOffStr = ''; meFixed.style.transform = ''; }
+      if (follow && shown && meMarker) map.panTo(followTarget(), { animate: false });
     }
     if (lock) { if (map.dragging.enabled()) map.dragging.disable(); }
     else if (dragLocked && !dragMode && !map.dragging.enabled()) map.dragging.enable();
@@ -595,7 +643,7 @@
   }
   setInterval(syncLock, 200);
   // after any zoom, put the map back exactly under the arrow
-  map.on('zoomend', function () { if (follow && shown && meMarker) map.panTo(shown, { animate: false }); });
+  map.on('zoomend', function () { if (follow && shown && meMarker) map.panTo(followTarget(), { animate: false }); });
 
   var banner = document.getElementById('banner'), distEl = document.getElementById('dist'), txtEl = document.getElementById('txt');
   var ALERT_M = 100; // the bump alert starts at 100 m
@@ -728,7 +776,7 @@
     if (route.fromMe === undefined && route.wps[0] && Math.abs(route.wps[0][0] - 31.18389) < 0.001 && Math.abs(route.wps[0][1] - 30.52417) < 0.001) route.fromMe = true;
   } catch (e) {}
   function saveRoute() { try { localStorage.setItem('route', JSON.stringify(route)); } catch (e) {} }
-  var routeLine = L.polyline([], { color: '#1a73e8', weight: 8, opacity: 0.85, lineCap: 'round', lineJoin: 'round', smoothFactor: 1.2, noClip: true }).addTo(map);
+  var routeLine = L.polyline([], { color: '#1a73e8', weight: 8, opacity: 0.85, lineCap: 'round', lineJoin: 'round', smoothFactor: 0.4, noClip: true }).addTo(map);
   // keep the same level of detail at every zoom: line width and bump size follow the zoom level
   function applyZoomStyle() {
     var z = map.getZoom();
@@ -742,7 +790,9 @@
     route.segs.forEach(function (s) { s.forEach(function (p) { pts.push(p); }); });
     return pts;
   }
+  var routePts = null, snapIdx = 0;
   function drawRoute() {
+    routePts = null; snapIdx = 0;
     routeLine.setLatLngs(routePoints());
     wpLayer.clearLayers();
     route.wps.forEach(function (w, i) {
