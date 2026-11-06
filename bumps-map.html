@@ -550,11 +550,20 @@
     // t runs past 1 when the next fix is late: the dot keeps going at the same speed (up to 1.3x the usual gap) instead of
     // stopping and then jumping when the fix finally arrives. GPS fixes are never perfectly regular, this hides it.
     var t = Math.max(0, Math.min(1.3, (now - g.t0) / g.dur));
-    shown = [g.from[0] + (g.to[0] - g.from[0]) * t, g.from[1] + (g.to[1] - g.from[1]) * t];
+    if (g.arc) {
+      // ride the road between fixes: interpolate by arc length, not by a straight chord, so the dot hugs the blue line
+      var ga = geomAt(g.arc0 + (g.arc1 - g.arc0) * t);
+      if (ga) { shown = ga.p; curArc = Math.max(0, Math.min(routeLen, g.arc0 + (g.arc1 - g.arc0) * t)); }
+      else { shown = [g.from[0] + (g.to[0] - g.from[0]) * t, g.from[1] + (g.to[1] - g.from[1]) * t]; } // route vanished mid-glide
+    } else {
+      shown = [g.from[0] + (g.to[0] - g.from[0]) * t, g.from[1] + (g.to[1] - g.from[1]) * t];
+    }
     // heading eases toward the target on its own clock (not per GPS fix): a 90-degree corner becomes a smooth turn
     // of about half a second instead of the whole map snapping round in one frame
     var dtF = Math.min(0.1, Math.max(0.001, (now - (lastFrameT || now)) / 1000)); lastFrameT = now;
-    var dH = angDiff(shownH, heading);
+    var hTgt = heading;
+    if (g.arc) { var rbN = roadBrgNear(curArc); if (rbN !== null) hTgt = rbN; } // the arrow turns WITH the road, not between fixes
+    var dH = angDiff(shownH, hTgt);
     shownH = (shownH + dH * (1 - Math.exp(-dtF / 0.22)) + 360) % 360;
     syncMeMode();
     var wantOff = (follow && lastDrive) ? map.getSize().y * 0.2 : 0;
@@ -585,14 +594,14 @@
     }
     // the dot is placed AFTER the map moved, every frame: it is always exactly on its real position, so it can never drift off the road
     meMarker.setLatLng(shown);
-    if (t < 1.3 || Math.abs(angDiff(shownH, heading)) > 0.4 || curOff !== wantOff) glideRaf = requestAnimationFrame(glideFrame);
+    if (t < 1.3 || Math.abs(angDiff(shownH, hTgt)) > 0.4 || curOff !== wantOff) glideRaf = requestAnimationFrame(glideFrame);
     else { glide = null; glideRaf = null; lastFrameT = 0; meMarker.setLatLng(shown); }
   }
   // keep the dot ON the blue line: GPS is a few metres off and a fix cuts across curves, so while you are within 30 m of the
   // route the position is projected onto it (like navigation apps do), and the heading follows the road ahead
   function snapToRoute(pos, hdg, acc) {
     var SNAP_R = Math.max(30, Math.min(60, (acc || 0) * 1.2));
-    var pts = routePts || (routePts = routePoints());
+    var pts = routeGeom();
     var n = pts.length; if (n < 2) return null;
     var kx = 111320 * Math.cos(pos[0] * toRad), ky = 111320;
     function seg(i) {
@@ -620,7 +629,7 @@
     while (acc < 12 && j < n - 1) { acc += dist(pts[j], pts[j + 1]); j++; tgt = pts[j]; }
     var rb = dist(p, tgt) > 0.5 ? bearing(p, tgt) : bearing(A, B);
     var useRoad = (typeof hdg !== 'number' || isNaN(hdg)) || Math.abs(angDiff(hdg, rb)) < 70;
-    return { p: p, brg: useRoad ? rb : hdg };
+    return { p: p, brg: useRoad ? rb : hdg, arc: routeCum[b.i] + dist(A, p) };
   }
   function setMe(pos, hdg, acc) {
     var sn = snapToRoute(pos, hdg, acc);
@@ -631,11 +640,24 @@
       meMarker = L.marker(pos, { icon: meIcon, zIndexOffset: 1000 }).addTo(map);
       shown = pos; shownH = heading;
     }
-    if (!shown || dist(shown, pos) > 150) { shown = pos; shownH = heading; } // far jump (new demo / first fix): snap, don't slide across the map
+    if (!shown || dist(shown, pos) > 150) { // far jump (new demo / first fix): snap, don't slide across the map
+      shown = pos; shownH = heading;
+      routeOn = !!(sn && routePts && routePts.length > 1); curArc = sn ? sn.arc : -1;
+    }
     var nowT = performance.now();
     if (lastFixT) { var dtFix = nowT - lastFixT; if (dtFix > 30 && dtFix < 4000) fixDur = fixDur * 0.6 + dtFix * 0.4; }
     lastFixT = nowT;
-    glide = { from: shown, to: pos, t0: nowT, dur: Math.max(60, fixDur) };
+    var dur = Math.max(60, fixDur);
+    // between two GPS fixes the road can bend: instead of a straight chord (which cuts the corner and leaves the line,
+    // badly on mobile where fixes are sparse) the dot glides ALONG the route geometry, so it never leaves the blue line
+    if (sn && routePts && routePts.length > 1 && routeOn && curArc >= 0) {
+      glide = { arc: true, arc0: curArc, arc1: sn.arc, t0: nowT, dur: dur };
+      curArc = sn.arc;
+    } else {
+      if (sn && routePts && routePts.length > 1) { routeOn = true; curArc = sn.arc; }
+      else { routeOn = false; curArc = -1; }
+      glide = { arc: false, from: shown, to: pos, t0: nowT, dur: dur };
+    }
     if (!glideRaf) glideRaf = requestAnimationFrame(glideFrame);
     updateBanner();
   }
@@ -930,9 +952,36 @@
     route.segs.forEach(function (s) { s.forEach(function (p) { pts.push(p); }); });
     return pts;
   }
-  var routePts = null, snapIdx = 0;
+  var routePts = null, snapIdx = 0, routeCum = null, routeLen = 0, routeOn = false, curArc = -1;
+  // route geometry cache: cumulative arc lengths let the dot ride the road (not cut corners) between GPS fixes
+  function routeGeom() {
+    if (!routePts) routePts = routePoints();
+    if (!routeCum) {
+      routeCum = [0];
+      for (var i = 1, tot = 0; i < routePts.length; i++) { tot += dist(routePts[i - 1], routePts[i]); routeCum.push(tot); }
+      routeLen = tot;
+    }
+    return routePts;
+  }
+  function geomAt(a) {
+    if (!routePts || routePts.length < 2) return null;
+    if (a <= 0) return { p: routePts[0], i: 0 };
+    if (a >= routeLen) return { p: routePts[routePts.length - 1], i: routePts.length - 2 };
+    var lo = 0, hi = routeCum.length - 1;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (routeCum[mid] < a) lo = mid + 1; else hi = mid; }
+    var i = Math.max(1, lo), d0 = routeCum[i - 1], d1 = routeCum[i];
+    var u = (d1 > d0) ? (a - d0) / (d1 - d0) : 0, A = routePts[i - 1], B = routePts[i];
+    return { p: [A[0] + (B[0] - A[0]) * u, A[1] + (B[1] - A[1]) * u], i: i - 1 };
+  }
+  function roadBrgNear(a) {
+    var g = geomAt(a); if (!g) return null;
+    var pts = routePts, i = Math.min(g.i, pts.length - 2), A = pts[i], B = pts[i + 1], p = g.p;
+    var j = i + 1, acc = dist(p, B), tgt = B; // bearing ~10 m ahead keeps the arrow turning smoothly at corners
+    while (acc < 10 && j < pts.length - 1) { acc += dist(pts[j], pts[j + 1]); j++; tgt = pts[j]; }
+    return dist(p, tgt) > 0.5 ? bearing(p, tgt) : bearing(A, B);
+  }
   function drawRoute() {
-    routePts = null; snapIdx = 0;
+    routePts = null; routeCum = null; routeLen = 0; snapIdx = 0; routeOn = false; curArc = -1;
     routeVer++; routeTiles.redraw();
     wpLayer.clearLayers(); // (the start / end / via dots are drawn inside the route tiles now)
   }
